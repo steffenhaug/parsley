@@ -1,0 +1,13 @@
+[package]
+name = "parsley-derive"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+quote = "1.0.15"
+proc-macro2 = "1.0.33"
+syn = { version = "1.0.86", features = ["extra-traits"] }
+
+[lib]
+name = "parsley_derive"
+proc-macro = true
