@@ -6,6 +6,7 @@
 /// text, basically) and how you can do another (semantic) pass to identify which symbols are non-
 /// terminal, and so on.
 use self::BnfToken::*;
+use self::Symbol::*;
 use crate::alphabet::Alphabet;
 use crate::parser::Parser;
 use logos::Logos;
@@ -32,11 +33,15 @@ enum BnfToken {
 
 // BNF grammar AST:
 
+type Set = HashSet<Symbol>;
+type Map = HashMap<Symbol, Set>;
+
 /// Defines a grammar over the alphabet `A`.
 #[derive(Debug)]
 pub struct Grammar<A: Alphabet> {
-    nonterminals: HashSet<Symbol>,
-    terminals: HashSet<Symbol>,
+    nonterminals: Set,
+    terminals: Set,
+    start: Symbol,
     productions: Vec<Production>,
     // Marker so we can access static methods on `A` for semantic validation.
     _a: std::marker::PhantomData<A>,
@@ -52,11 +57,9 @@ pub struct Production {
 pub enum Symbol {
     Terminal(String),
     Nonterminal(String),
-    Eps,
+    Epsilon,
+    Dollar,
 }
-
-type Set = HashSet<Symbol>;
-type Map = HashMap<Symbol, Set>;
 
 impl Symbol {
     /// Construct the set {t} from grammar symbol t.
@@ -74,12 +77,12 @@ impl<A: Alphabet> Grammar<A> {
     /// Check if a symbol is nullable, i. e. if any of the
     /// productions for `sym` allow deriving epsilon.
     pub fn nullable(&self, sym: &Symbol) -> bool {
-        self.productions_for(sym).any(|p| p.recipe == [Symbol::Eps])
+        self.productions_for(sym).any(|p| p.recipe == [Epsilon])
     }
 
     /// Computes the FIRST-set of a sequence of grammar symbols, given a
     /// database of first sets for the individual grammar symbols.
-    fn first_of_string<'a, S>(&self, xs: S, first: &'a Map) -> Set
+    fn first_of_seq<'a, S>(&self, xs: S, first: &'a Map) -> Set
     where
         S: IntoIterator<Item = &'a Symbol>,
     {
@@ -88,9 +91,9 @@ impl<A: Alphabet> Grammar<A> {
         for x in xs {
             // Add to FIRST(X1 X2 ... Xn) all the non-ε symbols of FIRST(X)
             // I. e., extend fst by FIRST(X) \ {ε}
-            fst.extend(&first[x] - &Symbol::Eps.singleton());
+            fst.extend(&first[x] - &Epsilon.singleton());
 
-            if !self.nullable(&x) {
+            if !self.nullable(x) {
                 break;
             }
         }
@@ -103,7 +106,7 @@ impl<A: Alphabet> Grammar<A> {
         let mut sets = Map::new();
 
         // Consider ε to be terminal to remove special cases.
-        sets.insert(Symbol::Eps, Symbol::Eps.singleton());
+        sets.insert(Epsilon, Epsilon.singleton());
 
         // Rule #1: Terminals t start with {t}.
         for t in &self.terminals {
@@ -113,7 +116,7 @@ impl<A: Alphabet> Grammar<A> {
         // Rule #3: Nullable non-terminals start with {ε}.
         for nt in &self.nonterminals {
             let initial_set = if self.nullable(nt) {
-                Symbol::Eps.singleton()
+                Epsilon.singleton()
             } else {
                 Set::new()
             };
@@ -135,7 +138,78 @@ impl<A: Alphabet> Grammar<A> {
                 let fst = sets.get_mut(symbol).expect("corrupt first set database");
 
                 // Rule #2:
-                fst.extend(self.first_of_string(recipe, &old_sets));
+                fst.extend(self.first_of_seq(recipe, &old_sets));
+            }
+
+            if sets == old_sets {
+                break;
+            }
+        }
+
+        sets
+    }
+
+    /// Calculates a map of new follow sets based on the old follows and a production.
+    fn update_follows(
+        &self,
+        p: &Production,
+        fol_sets: &Map,
+        fst_sets: &Map,
+        new_fol_sets: &mut Map,
+    ) {
+        // Following the notation of the dragon book, A -> α B β, where
+        // α, β arbitrary sequences of symbols. We are only interested in
+        // β. A, B denoted as a, b to follow rust variable convention.
+
+        let Production { symbol: a, recipe: alpha_b_beta } = p;
+
+        for (i, b) in alpha_b_beta.iter().enumerate() {
+            // We are only interested in what follows non-terminals.
+            if !self.nonterminals.contains(b) {
+                continue;
+            }
+
+            // The symbol sequence beta starts after the position of B.
+            let beta = &alpha_b_beta[i + 1..];
+
+            // Again, all non-terminals are already added to this map, so
+            // in the event that this fails, something is very seriously wrong.
+            let fol = new_fol_sets
+                .get_mut(b)
+                .expect("corrupt follow set database");
+
+            // Finally ready to apply the rules:
+            let fst_beta = self.first_of_seq(beta, fst_sets);
+
+            if !(fst_beta.is_empty() || fst_beta.contains(&Epsilon)) {
+                // Rule #2: B followed by β where ε not in FIRST(β).
+                fol.extend(&fst_beta - &Epsilon.singleton());
+            } else {
+                // Rule #3: B followed by β where ε in FIRST(β), or A -> αB.
+                fol.extend(&fol_sets[a] - &Epsilon.singleton());
+            }
+        }
+    }
+
+    pub fn follow_sets(&self, fst_sets: &Map) -> Map {
+        let mut sets = Map::new();
+
+        // Rule #1: Start with $ as the follow of the start symbol.
+        for nt in &self.nonterminals {
+            let initial_set = if *nt == self.start {
+                Dollar.singleton()
+            } else {
+                Set::new()
+            };
+
+            sets.insert(nt.clone(), initial_set);
+        }
+
+        loop {
+            let old_sets = sets.clone();
+
+            for p in &self.productions {
+                self.update_follows(p, &old_sets, fst_sets, &mut sets);
             }
 
             if sets == old_sets {
@@ -171,17 +245,23 @@ impl Parser<Vec<Rule>> for BnfParser {
 
 /// Semantic analysis turns the list of rules into a proper
 /// grammar where important semantic information is determined.
-pub fn semantic_analysis<A>(rules: Vec<Rule>) -> Result<Grammar<A>, ()>
+pub fn semantic_analysis<A>(rules: Vec<Rule>, start_name: &str) -> Result<Grammar<A>, ()>
 where
     A: Alphabet,
 {
-    let mut terminals = HashSet::<Symbol>::new();
-    let mut nonterminals = HashSet::<Symbol>::new();
+    let mut terminals = Set::new();
+    let mut nonterminals = Set::new();
     let mut productions = Vec::new();
 
     // First step of semantic analysis: Find the non-temrinals.
     for Rule { symbol, .. } in &rules {
-        nonterminals.insert(Symbol::Nonterminal(symbol.to_string()));
+        nonterminals.insert(Nonterminal(symbol.to_string()));
+    }
+
+    // Check that the start symbol is actually a valid nonterminal.
+    let start = Nonterminal(start_name.to_string());
+    if !nonterminals.contains(&start) {
+        return Err(());
     }
 
     // Second step of semantic analysis:
@@ -192,22 +272,22 @@ where
         let mut recipe: Vec<Symbol> = recipe
             .into_iter()
             .map(|sym| {
-                if nonterminals.contains(&Symbol::Nonterminal(sym.to_string())) {
-                    Ok(Symbol::Nonterminal(sym))
+                if nonterminals.contains(&Nonterminal(sym.to_string())) {
+                    Ok(Nonterminal(sym))
                 } else {
-                    terminals.insert(Symbol::Terminal(sym.to_string()));
-                    Ok(Symbol::Terminal(sym))
+                    terminals.insert(Terminal(sym.to_string()));
+                    Ok(Terminal(sym))
                 }
             })
             .collect::<Result<_, String>>()
             .unwrap();
 
-        if recipe.len() == 0 {
-            recipe.push(Symbol::Eps);
+        if recipe.is_empty() {
+            recipe.push(Epsilon);
         }
 
         let p = Production {
-            symbol: Symbol::Nonterminal(symbol),
+            symbol: Nonterminal(symbol),
             recipe,
         };
 
@@ -218,6 +298,7 @@ where
         nonterminals,
         terminals,
         productions,
+        start,
         _a: std::marker::PhantomData,
     };
 
@@ -335,9 +416,10 @@ impl BnfParser {
 impl fmt::Display for Symbol {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Symbol::Terminal(s) => write!(f, "{}", s),
-            Symbol::Nonterminal(s) => write!(f, "{}", s),
-            Symbol::Eps => write!(f, "ε"),
+            Terminal(s) => write!(f, "{}", s),
+            Nonterminal(s) => write!(f, "{}", s),
+            Epsilon => write!(f, "ε"),
+            Dollar => write!(f, "$"),
         }
     }
 }
@@ -356,8 +438,10 @@ impl<A: Alphabet> fmt::Display for Grammar<A> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // Write productions.
         for rule in &self.productions {
-            write!(f, "{}\n", rule)?;
+            writeln!(f, "{}", rule)?;
         }
+
+        writeln!(f, "Start symbol: {}", self.start)?;
 
         // Write non-terminals.
         write!(f, "Non-terminals:")?;
@@ -381,9 +465,10 @@ impl<A: Alphabet> fmt::Display for Grammar<A> {
 impl Clone for Symbol {
     fn clone(&self) -> Self {
         match self {
-            Symbol::Nonterminal(s) => Symbol::Nonterminal(s.clone()),
-            Symbol::Terminal(s) => Symbol::Terminal(s.clone()),
-            Symbol::Eps => Symbol::Eps,
+            Nonterminal(s) => Nonterminal(s.clone()),
+            Terminal(s) => Terminal(s.clone()),
+            Epsilon => Epsilon,
+            Dollar => Dollar,
         }
     }
 }

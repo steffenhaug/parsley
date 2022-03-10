@@ -18,20 +18,23 @@ enum Sym {
 const GRAMMAR: &str = r"
 S : w X z
 
-X : m b X'
+X : M B X'
 
 X' : e X''
    |
 
-P : p
-
 X'' : X
-    | b
+    | B
+
+B : b
+
+M : m
 ";
 
 fn main() {
     let ast = BnfParser::new(GRAMMAR).parse().unwrap();
-    let grammar: Grammar<Sym> = bnf::semantic_analysis(ast).unwrap();
+    let grammar: Grammar<Sym> = bnf::semantic_analysis(ast, "S").unwrap();
+    let fst = grammar.first_sets();
     println!("{}", grammar);
-    println!("{:?}", grammar.first_sets());
+    println!("{:?}", grammar.follow_sets(&fst));
 }
