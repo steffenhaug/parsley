@@ -1,20 +1,17 @@
-/// Parser for BNF grammars.
-/// The parser itself is using recursive descent, and can thus
-/// utilize EBNF-things like Kleene stars easily by using loops,
-/// but it doesn't parse grammars that uses these operators.
+/// Parser for BNF grammars. The parser itself is using recursive descent, and can thus utilize
+/// EBNF-things like Kleene stars easily by using loops, but it doesn't parse grammars that uses
+/// these operators.
 ///
-/// The parser showcases how to use recursive descent to construct
-/// a "dumb tree" (just nodes with text, basically) and how you can
-/// do another (semantic) pass to identify which symbols are non-
+/// The parser showcases how to use recursive descent to construct a "dumb tree" (just nodes with
+/// text, basically) and how you can do another (semantic) pass to identify which symbols are non-
 /// terminal, and so on.
-
-use std::mem;
-use std::collections::{HashMap, HashSet};
-use logos::Logos;
-use crate::parser::Parser;
+use self::BnfToken::*;
 use crate::alphabet::Alphabet;
+use crate::parser::Parser;
+use logos::Logos;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
-use self::BnfToken::*; // Simplifies the recursive descent.
+use std::mem; // Simplifies the recursive descent.
 
 /// A token in a BNF grammar specification.
 #[derive(Logos, Debug, Clone, PartialEq)]
@@ -23,14 +20,14 @@ enum BnfToken {
     Colon,
     #[token("|")]
     Pipe,
-    #[regex(r"[a-zA-Z!$\+\-\^&<*/'=?@>_~]+", |lex| lex.slice().to_owned() )]
+    #[regex(r"[a-zA-Z!$\+\-\^&</'=@>_~]+", |lex| lex.slice().to_owned() )]
     Symbol(String),
     #[regex("\n\n")] // double newline separates rules
     Separator,
     #[error]
     #[regex(r"[ \t\n]", logos::skip)]
     Error,
-    Eof
+    Eof,
 }
 
 // BNF grammar AST:
@@ -38,23 +35,116 @@ enum BnfToken {
 /// Defines a grammar over the alphabet `A`.
 #[derive(Debug)]
 pub struct Grammar<A: Alphabet> {
-    nonterminals: HashSet<String>,
-    terminals: HashMap<String, usize>,
+    nonterminals: HashSet<Symbol>,
+    terminals: HashSet<Symbol>,
     productions: Vec<Production>,
-    // Marker so we can use static functions on A.
-    _marker: std::marker::PhantomData<A>
+    // Marker so we can access static methods on `A` for semantic validation.
+    _a: std::marker::PhantomData<A>,
 }
 
 #[derive(Debug)]
 pub struct Production {
-    symbol: String,
-    recipe: Vec<Symbol>
+    symbol: Symbol,
+    recipe: Vec<Symbol>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Hash, PartialEq, Eq)]
 pub enum Symbol {
     Terminal(String),
-    Nonterminal(String)
+    Nonterminal(String),
+    Eps,
+}
+
+type Set = HashSet<Symbol>;
+type Map = HashMap<Symbol, Set>;
+
+impl Symbol {
+    /// Construct the set {t} from grammar symbol t.
+    fn singleton(self) -> Set {
+        Set::from([self])
+    }
+}
+
+impl<A: Alphabet> Grammar<A> {
+    /// Find all rules in the grammar that produces `sym`.
+    pub fn productions_for<'a>(&'a self, sym: &'a Symbol) -> impl Iterator<Item = &'a Production> {
+        self.productions.iter().filter(|p| p.symbol == *sym)
+    }
+
+    /// Check if a symbol is nullable, i. e. if any of the
+    /// productions for `sym` allow deriving epsilon.
+    pub fn nullable(&self, sym: &Symbol) -> bool {
+        self.productions_for(sym).any(|p| p.recipe == [Symbol::Eps])
+    }
+
+    /// Computes the FIRST-set of a sequence of grammar symbols, given a
+    /// database of first sets for the individual grammar symbols.
+    fn first_of_string<'a, S>(&self, xs: S, first: &'a Map) -> Set
+    where
+        S: IntoIterator<Item = &'a Symbol>,
+    {
+        let mut fst = Set::new();
+
+        for x in xs {
+            // Add to FIRST(X1 X2 ... Xn) all the non-ε symbols of FIRST(X)
+            // I. e., extend fst by FIRST(X) \ {ε}
+            fst.extend(&first[x] - &Symbol::Eps.singleton());
+
+            if !self.nullable(&x) {
+                break;
+            }
+        }
+
+        fst
+    }
+
+    pub fn first_sets(&self) -> Map {
+        // Set up the starting sets.
+        let mut sets = Map::new();
+
+        // Consider ε to be terminal to remove special cases.
+        sets.insert(Symbol::Eps, Symbol::Eps.singleton());
+
+        // Rule #1: Terminals t start with {t}.
+        for t in &self.terminals {
+            sets.insert(t.clone(), t.clone().singleton());
+        }
+
+        // Rule #3: Nullable non-terminals start with {ε}.
+        for nt in &self.nonterminals {
+            let initial_set = if self.nullable(nt) {
+                Symbol::Eps.singleton()
+            } else {
+                Set::new()
+            };
+
+            sets.insert(nt.clone(), initial_set);
+        }
+
+        // Now we iterate with Rule #2 ref. Dragon Book.
+        // The book seems to imply that we should iterate with every rule, but
+        // clearly whether a symbol is terminal or nullable is invariant over
+        // the loop.
+        loop {
+            let old_sets = sets.clone();
+
+            for Production { symbol, recipe } in &self.productions {
+                // Get the first set of the left hand side of this production.
+                // All grammar symbols should already be inserted, so this failing
+                // indicates something is seriously wrong, and a panic is warranted.
+                let fst = sets.get_mut(symbol).expect("corrupt first set database");
+
+                // Rule #2:
+                fst.extend(self.first_of_string(recipe, &old_sets));
+            }
+
+            if sets == old_sets {
+                break;
+            }
+        }
+
+        sets
+    }
 }
 
 // The "dumb tree" is just a vector of rules:
@@ -62,14 +152,14 @@ pub enum Symbol {
 #[derive(Debug)]
 pub struct Rule {
     symbol: String,
-    recipe: Vec<String>
+    recipe: Vec<String>,
 }
 
 #[derive(Debug)]
 pub struct BnfParser {
     tokens: Vec<BnfToken>,
     position: usize,
-    ast: Vec<Rule>
+    ast: Vec<Rule>,
 }
 
 impl Parser<Vec<Rule>> for BnfParser {
@@ -80,18 +170,18 @@ impl Parser<Vec<Rule>> for BnfParser {
 }
 
 /// Semantic analysis turns the list of rules into a proper
-/// grammar where non-terminals are determined. This will in
-/// the future probably also include computation of FIRST/FOLLOW.
+/// grammar where important semantic information is determined.
 pub fn semantic_analysis<A>(rules: Vec<Rule>) -> Result<Grammar<A>, ()>
-where A: Alphabet
+where
+    A: Alphabet,
 {
-    let mut terminals = HashMap::<String, usize>::new();
-    let mut nonterminals = HashSet::<String>::new();
+    let mut terminals = HashSet::<Symbol>::new();
+    let mut nonterminals = HashSet::<Symbol>::new();
     let mut productions = Vec::new();
 
     // First step of semantic analysis: Find the non-temrinals.
     for Rule { symbol, .. } in &rules {
-        nonterminals.insert(symbol.to_string());
+        nonterminals.insert(Symbol::Nonterminal(symbol.to_string()));
     }
 
     // Second step of semantic analysis:
@@ -99,28 +189,36 @@ where A: Alphabet
     // right-hand side, and check that all the terminals have an enum
     // variant in the underlying alphabet.
     for Rule { symbol, recipe } in rules {
-        let recipe = recipe
+        let mut recipe: Vec<Symbol> = recipe
             .into_iter()
             .map(|sym| {
-                if nonterminals.contains(&sym) {
+                if nonterminals.contains(&Symbol::Nonterminal(sym.to_string())) {
                     Ok(Symbol::Nonterminal(sym))
                 } else {
-                    let id = A::lr_id_from_str(&sym).ok_or(&sym)?;
-                    terminals.insert(sym.to_string(), id);
+                    terminals.insert(Symbol::Terminal(sym.to_string()));
                     Ok(Symbol::Terminal(sym))
                 }
             })
-            .collect::<Result<_, String>>();
+            .collect::<Result<_, String>>()
+            .unwrap();
 
-        let p = Production { symbol, recipe: recipe.unwrap() };
+        if recipe.len() == 0 {
+            recipe.push(Symbol::Eps);
+        }
+
+        let p = Production {
+            symbol: Symbol::Nonterminal(symbol),
+            recipe,
+        };
+
         productions.push(p);
     }
 
-    let g = Grammar { 
-        nonterminals, 
-        terminals, 
+    let g = Grammar {
+        nonterminals,
+        terminals,
         productions,
-        _marker: std::marker::PhantomData
+        _a: std::marker::PhantomData,
     };
 
     Ok(g)
@@ -131,9 +229,9 @@ impl BnfParser {
         // Lexing the entire token stream up front should not be problematic.
         let tokens = BnfToken::lexer(src.as_ref()).into_iter().collect();
         BnfParser {
-            tokens, 
-            position: 0, 
-            ast: Vec::new()
+            tokens,
+            position: 0,
+            ast: Vec::new(),
         }
     }
 
@@ -224,7 +322,8 @@ impl BnfParser {
         }
 
         let rule = Rule {
-            symbol: sym.to_string(), recipe: symbols
+            symbol: sym.to_string(),
+            recipe: symbols,
         };
 
         Ok(rule)
@@ -238,6 +337,7 @@ impl fmt::Display for Symbol {
         match self {
             Symbol::Terminal(s) => write!(f, "{}", s),
             Symbol::Nonterminal(s) => write!(f, "{}", s),
+            Symbol::Eps => write!(f, "ε"),
         }
     }
 }
@@ -254,8 +354,6 @@ impl fmt::Display for Production {
 
 impl<A: Alphabet> fmt::Display for Grammar<A> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let _marker: std::marker::PhantomData::<A>;
-
         // Write productions.
         for rule in &self.productions {
             write!(f, "{}\n", rule)?;
@@ -270,11 +368,22 @@ impl<A: Alphabet> fmt::Display for Grammar<A> {
 
         // Write terminals.
         write!(f, "Terminals:")?;
-        for t in self.terminals.keys() {
+        for t in &self.terminals {
             write!(f, " {}", t)?;
         }
 
         Ok(())
     }
+}
 
+// We have to implement this ourselves to circumvent the PhantomData, so
+// we don't force all alphabet symbols to implement clone.
+impl Clone for Symbol {
+    fn clone(&self) -> Self {
+        match self {
+            Symbol::Nonterminal(s) => Symbol::Nonterminal(s.clone()),
+            Symbol::Terminal(s) => Symbol::Terminal(s.clone()),
+            Symbol::Eps => Symbol::Eps,
+        }
+    }
 }

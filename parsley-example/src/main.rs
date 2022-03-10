@@ -1,35 +1,37 @@
-use parsley::{Alphabet, Parser, BnfParser, Grammar, bnf};
-use logos::Logos;
+use parsley::{bnf, Alphabet, BnfParser, Grammar, Parser};
 
-#[derive(Alphabet, Logos)]
+#[allow(dead_code)]
+#[derive(Alphabet, PartialEq, Eq, Hash)]
 enum Sym {
-    #[terminal("n")]
-    #[regex(r"[0-9]+", |lex| lex.slice().parse())]
-    N(i32),
-    #[terminal("+")] 
-    #[token("+")]
-    Plus,
-    #[terminal("-")] 
-    #[token("-")]
-    Minus,
-    #[error] 
-    #[regex(r" \t\n", logos::skip)]
-    Error,
+    #[terminal("w")]
+    Where,
+    #[terminal("m")]
+    Mask,
+    #[terminal("b")]
+    Block,
+    #[terminal("e")]
+    Elsewhere,
+    #[terminal("z")]
+    End,
 }
 
 const GRAMMAR: &str = r"
-    S : T
+S : w X z
 
-    T : T + T
-      | T - T
-      | N
+X : m b X'
 
-    N : n
+X' : e X''
+   |
+
+P : p
+
+X'' : X
+    | b
 ";
-
 
 fn main() {
     let ast = BnfParser::new(GRAMMAR).parse().unwrap();
     let grammar: Grammar<Sym> = bnf::semantic_analysis(ast).unwrap();
     println!("{}", grammar);
+    println!("{:?}", grammar.first_sets());
 }
