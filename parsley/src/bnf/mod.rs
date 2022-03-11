@@ -1,36 +1,15 @@
-/// Parser for BNF grammars. The parser itself is using recursive descent, and can thus utilize
-/// EBNF-things like Kleene stars easily by using loops, but it doesn't parse grammars that uses
-/// these operators.
-///
-/// The parser showcases how to use recursive descent to construct a "dumb tree" (just nodes with
-/// text, basically) and how you can do another (semantic) pass to identify which symbols are non-
-/// terminal, and so on.
-use self::BnfToken::*;
+mod bnf_parser;
+
 use self::Symbol::*;
 use crate::alphabet::Alphabet;
-use crate::parser::Parser;
-use logos::Logos;
+use crate::lr::LrItem;
+
+use std::sync::Arc;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::mem; // Simplifies the recursive descent.
 
-/// A token in a BNF grammar specification.
-#[derive(Logos, Debug, Clone, PartialEq)]
-enum BnfToken {
-    #[token(":")]
-    Colon,
-    #[token("|")]
-    Pipe,
-    #[regex(r"[a-zA-Z!$\+\-\^&</'=@>_~]+", |lex| lex.slice().to_owned() )]
-    Symbol(String),
-    #[regex("\n\n")] // double newline separates rules
-    Separator,
-    #[error]
-    #[regex(r"[ \t\n]", logos::skip)]
-    Error,
-    Eof,
-}
-
+// Re-export
+pub use bnf_parser::parse_bnf as parse;
 // BNF grammar AST:
 
 type Set = HashSet<Symbol>;
@@ -41,7 +20,7 @@ type Map = HashMap<Symbol, Set>;
 pub struct Grammar<A: Alphabet> {
     nonterminals: Set,
     terminals: Set,
-    start: Symbol,
+    start_sym: Symbol,
     productions: Vec<Production>,
     // Marker so we can access static methods on `A` for semantic validation.
     _a: std::marker::PhantomData<A>,
@@ -55,8 +34,8 @@ pub struct Production {
 
 #[derive(Debug, Hash, PartialEq, Eq)]
 pub enum Symbol {
-    Terminal(String),
-    Nonterminal(String),
+    Terminal(Arc<str>),
+    Nonterminal(Arc<str>),
     Epsilon,
     Dollar,
 }
@@ -128,6 +107,7 @@ impl<A: Alphabet> Grammar<A> {
         // The book seems to imply that we should iterate with every rule, but
         // clearly whether a symbol is terminal or nullable is invariant over
         // the loop.
+
         loop {
             let old_sets = sets.clone();
 
@@ -161,7 +141,10 @@ impl<A: Alphabet> Grammar<A> {
         // α, β arbitrary sequences of symbols. We are only interested in
         // β. A, B denoted as a, b to follow rust variable convention.
 
-        let Production { symbol: a, recipe: alpha_b_beta } = p;
+        let Production {
+            symbol: a,
+            recipe: alpha_b_beta,
+        } = p;
 
         for (i, b) in alpha_b_beta.iter().enumerate() {
             // We are only interested in what follows non-terminals.
@@ -196,7 +179,7 @@ impl<A: Alphabet> Grammar<A> {
 
         // Rule #1: Start with $ as the follow of the start symbol.
         for nt in &self.nonterminals {
-            let initial_set = if *nt == self.start {
+            let initial_set = if *nt == self.start_sym {
                 Dollar.singleton()
             } else {
                 Set::new()
@@ -221,195 +204,6 @@ impl<A: Alphabet> Grammar<A> {
     }
 }
 
-// The "dumb tree" is just a vector of rules:
-
-#[derive(Debug)]
-pub struct Rule {
-    symbol: String,
-    recipe: Vec<String>,
-}
-
-#[derive(Debug)]
-pub struct BnfParser {
-    tokens: Vec<BnfToken>,
-    position: usize,
-    ast: Vec<Rule>,
-}
-
-impl Parser<Vec<Rule>> for BnfParser {
-    type Error = ();
-    fn parse(self) -> Result<Vec<Rule>, Self::Error> {
-        self.grammar()
-    }
-}
-
-/// Semantic analysis turns the list of rules into a proper
-/// grammar where important semantic information is determined.
-pub fn semantic_analysis<A>(rules: Vec<Rule>, start_name: &str) -> Result<Grammar<A>, ()>
-where
-    A: Alphabet,
-{
-    let mut terminals = Set::new();
-    let mut nonterminals = Set::new();
-    let mut productions = Vec::new();
-
-    // First step of semantic analysis: Find the non-temrinals.
-    for Rule { symbol, .. } in &rules {
-        nonterminals.insert(Nonterminal(symbol.to_string()));
-    }
-
-    // Check that the start symbol is actually a valid nonterminal.
-    let start = Nonterminal(start_name.to_string());
-    if !nonterminals.contains(&start) {
-        return Err(());
-    }
-
-    // Second step of semantic analysis:
-    // For all the rules, identify terminals and non-terminals on the
-    // right-hand side, and check that all the terminals have an enum
-    // variant in the underlying alphabet.
-    for Rule { symbol, recipe } in rules {
-        let mut recipe: Vec<Symbol> = recipe
-            .into_iter()
-            .map(|sym| {
-                if nonterminals.contains(&Nonterminal(sym.to_string())) {
-                    Ok(Nonterminal(sym))
-                } else {
-                    terminals.insert(Terminal(sym.to_string()));
-                    Ok(Terminal(sym))
-                }
-            })
-            .collect::<Result<_, String>>()
-            .unwrap();
-
-        if recipe.is_empty() {
-            recipe.push(Epsilon);
-        }
-
-        let p = Production {
-            symbol: Nonterminal(symbol),
-            recipe,
-        };
-
-        productions.push(p);
-    }
-
-    let g = Grammar {
-        nonterminals,
-        terminals,
-        productions,
-        start,
-        _a: std::marker::PhantomData,
-    };
-
-    Ok(g)
-}
-
-impl BnfParser {
-    pub fn new(src: impl AsRef<str>) -> BnfParser {
-        // Lexing the entire token stream up front should not be problematic.
-        let tokens = BnfToken::lexer(src.as_ref()).into_iter().collect();
-        BnfParser {
-            tokens,
-            position: 0,
-            ast: Vec::new(),
-        }
-    }
-
-    fn look(&self) -> BnfToken {
-        // Most tokens are cheap to clone, and even in the case
-        // where it has a String we need to clone the symbol later if
-        // we dont do it here.
-        if self.position < self.tokens.len() {
-            self.tokens[self.position].clone()
-        } else {
-            Eof
-        }
-    }
-
-    fn match_sym(&mut self) -> Result<String, ()> {
-        if let Symbol(s) = self.look() {
-            self.position += 1;
-            Ok(s)
-        } else {
-            Err(())
-        }
-    }
-
-    fn match_tok(&mut self, tok: BnfToken) -> Result<(), ()> {
-        // This is the most generic way to check if two enums are of the
-        // same variant, since doing this with a match would require N
-        // lines for N variants, and testing for equality wouldnt be
-        // exactly correct for variant with strings.
-        if mem::discriminant(&self.look()) == mem::discriminant(&tok) {
-            self.position += 1;
-            Ok(())
-        } else {
-            Err(())
-        }
-    }
-
-    // Production:
-    //   grammar -> rule*
-    // Note how easy is is to do Kleene stars when we are not
-    // locked to the world of DFAs.
-    fn grammar(mut self) -> Result<Vec<Rule>, ()> {
-        // As long as there are symbols in the token stream...
-        while let Symbol(_) = self.look() {
-            // Parse a rule and add it to the list of productions.
-            let rule = self.rule()?;
-            self.ast.extend(rule.into_iter());
-        }
-
-        // When there are no more symbols in the lookahead, we should
-        // be at the end of input.
-        if self.look() == Eof {
-            Ok(self.ast)
-        } else {
-            Err(())
-        }
-    }
-
-    // Production:
-    //   rule -> symbol ':' recipe ('|' recipe)*
-    // A rule has one or more recipes, separated by pipe symbols.
-    // Again, we use a loop to implement the Kleene star.
-    fn rule(&mut self) -> Result<Vec<Rule>, ()> {
-        let mut productions = Vec::new();
-        let sym = self.match_sym()?;
-        self.match_tok(Colon)?;
-        productions.push(self.recipe(&sym)?);
-
-        while self.look() == Pipe {
-            self.match_tok(Pipe)?;
-            productions.push(self.recipe(&sym)?);
-        }
-
-        if self.look() == Separator {
-            self.match_tok(Separator)?;
-        }
-
-        Ok(productions)
-    }
-
-    // Production:
-    //   recipe -> symbol*
-    // A recipe with no symbols are permitted and should be interpreted
-    // as epsillon.
-    fn recipe(&mut self, sym: &str) -> Result<Rule, ()> {
-        let mut symbols = Vec::new();
-        while let Symbol(_) = self.look() {
-            symbols.push(self.match_sym()?);
-        }
-
-        let rule = Rule {
-            symbol: sym.to_string(),
-            recipe: symbols,
-        };
-
-        Ok(rule)
-    }
-}
 
 // Display implementations.
 
@@ -441,7 +235,7 @@ impl<A: Alphabet> fmt::Display for Grammar<A> {
             writeln!(f, "{}", rule)?;
         }
 
-        writeln!(f, "Start symbol: {}", self.start)?;
+        writeln!(f, "Start symbol: {}", self.start_sym)?;
 
         // Write non-terminals.
         write!(f, "Non-terminals:")?;
@@ -472,3 +266,26 @@ impl Clone for Symbol {
         }
     }
 }
+
+// cba newtyping to impl display for now
+
+pub fn pretty_print_map(map: &Map, description: &str) {
+    println!("{}", description);
+    for (k, v) in map {
+        print!("{}: ", k);
+        pretty_print_set(v);
+        println!();
+    }
+}
+
+pub fn pretty_print_set(set: &Set) {
+    print!("{{");
+    for (i, x) in set.iter().enumerate() {
+        if i != 0 {
+            print!(", ");
+        }
+        print!("{}", x);
+    }
+    print!("}}");
+}
+

@@ -1,4 +1,4 @@
-use parsley::{bnf, Alphabet, BnfParser, Grammar, Parser};
+use parsley::{bnf, Alphabet, Grammar, Parser};
 
 #[allow(dead_code)]
 #[derive(Alphabet, PartialEq, Eq, Hash)]
@@ -32,9 +32,10 @@ M : m
 ";
 
 fn main() {
-    let ast = BnfParser::new(GRAMMAR).parse().unwrap();
-    let grammar: Grammar<Sym> = bnf::semantic_analysis(ast, "S").unwrap();
+    let grammar: Grammar<Sym> = bnf::parse(GRAMMAR, "S").unwrap();
     let fst = grammar.first_sets();
+    let fol = grammar.follow_sets(&fst);
     println!("{}", grammar);
-    println!("{:?}", grammar.follow_sets(&fst));
+    bnf::pretty_print_map(&fst, "FIRST");
+    bnf::pretty_print_map(&fol, "FOLLOW");
 }
