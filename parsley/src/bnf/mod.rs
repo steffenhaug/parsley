@@ -1,16 +1,19 @@
+/// The bnf-module contains a structure for and operations on
+/// grammars in bnf form, such as computing FIRST- and FOLLOW-
+/// sets, creating LR-items, calculating closures of LR-items,
+/// and so on.
 mod bnf_parser;
 
 use self::Symbol::*;
 use crate::alphabet::Alphabet;
-use crate::lr::LrItem;
+use crate::lr::{ItemSet, LrItem};
 
-use std::sync::Arc;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::sync::Arc;
 
 // Re-export
 pub use bnf_parser::parse_bnf as parse;
-// BNF grammar AST:
 
 type Set = HashSet<Symbol>;
 type Map = HashMap<Symbol, Set>;
@@ -26,10 +29,10 @@ pub struct Grammar<A: Alphabet> {
     _a: std::marker::PhantomData<A>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct Production {
-    symbol: Symbol,
-    recipe: Vec<Symbol>,
+    pub(crate) symbol: Symbol,
+    pub(crate) recipe: Vec<Symbol>,
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
@@ -80,6 +83,8 @@ impl<A: Alphabet> Grammar<A> {
         fst
     }
 
+    /// Computes the first sets for all grammar symbols, including terminals
+    /// and also including epsilon.
     pub fn first_sets(&self) -> Map {
         // Set up the starting sets.
         let mut sets = Map::new();
@@ -104,8 +109,8 @@ impl<A: Alphabet> Grammar<A> {
         }
 
         // Now we iterate with Rule #2 ref. Dragon Book.
-        // The book seems to imply that we should iterate with every rule, but
-        // clearly whether a symbol is terminal or nullable is invariant over
+        // The book almost seems to imply that we should iterate with every rule,
+        // but clearly whether a symbol is terminal or nullable is invariant over
         // the loop.
 
         loop {
@@ -202,8 +207,61 @@ impl<A: Alphabet> Grammar<A> {
 
         sets
     }
-}
 
+    /// Get _all_ LR-items (dots in every position) for the given productions.
+    pub fn lr_items<'a, P>(&self, prods: P) -> Vec<LrItem>
+    where
+        P: IntoIterator<Item = &'a Production>,
+    {
+        let mut items = Vec::new();
+
+        for pr in prods {
+            // For a production A -> X Y Z, add the LR items
+            // A -> . X Y Z, A -> X . Y Z and so on. Note that
+            // we also include the dot == len case (dot at end)
+            for dot in 0..1 + pr.recipe.len() {
+                items.push(LrItem::of(dot, pr));
+            }
+        }
+
+        items
+    }
+
+    // Get _all_ LR-items for every production in the grammar.
+    pub fn all_lr_items(&self) -> Vec<LrItem> {
+        self.lr_items(&self.productions)
+    }
+
+    pub fn closure(&self, lri: &LrItem) -> ItemSet {
+        // Add the lr item itself to t he closure.
+        let mut items = ItemSet::from([lri.clone()]);
+
+        'fixpoint: loop {
+            let old_items = items.clone();
+
+            for it in &old_items {
+                // Find the symbol after the dot (if there is any)
+                if let Some(sym) = it.production.recipe.get(it.dot) {
+                    // Find all productions for this symbol, and construct
+                    // the LR-item with dot in the firstmost position.
+                    let frontier: ItemSet = self
+                        .productions_for(sym)
+                        .map(|pr| LrItem::of(0, pr))
+                        .collect();
+
+                    // Add these LR-items to the set.
+                    items.extend(frontier);
+                }
+            }
+
+            if items == old_items {
+                break 'fixpoint;
+            }
+        }
+
+        items
+    }
+}
 
 // Display implementations.
 
@@ -278,7 +336,10 @@ pub fn pretty_print_map(map: &Map, description: &str) {
     }
 }
 
-pub fn pretty_print_set(set: &Set) {
+pub fn pretty_print_set<P>(set: &HashSet<P>)
+where
+    P: fmt::Display,
+{
     print!("{{");
     for (i, x) in set.iter().enumerate() {
         if i != 0 {
@@ -288,4 +349,3 @@ pub fn pretty_print_set(set: &Set) {
     }
     print!("}}");
 }
-
