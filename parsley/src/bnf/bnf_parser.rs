@@ -35,7 +35,7 @@ pub(crate) enum BnfToken {
     Colon,
     #[token("|")]
     Pipe,
-    #[regex(r"[a-zA-Z!$\+\-\^&</'=@>_~]+", |lex| lex.slice().to_owned() )]
+    #[regex(r"[a-zA-Z!$\+*\-\^&</'=@>_~\(\)]+", |lex| lex.slice().to_owned() )]
     Symbol(String),
     #[regex("\n\n")] // double newline separates rules
     Separator,
@@ -76,7 +76,6 @@ where
 {
     // The AST is obtained by invoking the BNF parser.
     let ast = BnfParser::new(bnf).parse()?;
-
     // The Grammar proper is obtained by performing semantic analysis on the AST.
     semantic_analysis(ast, start_sym.as_ref())
 }
@@ -215,6 +214,7 @@ where
     if !nonterminals.contains(start_name) {
         return Err(());
     }
+
 
     let start_sym = Nonterminal(start_name.to_string().into());
 

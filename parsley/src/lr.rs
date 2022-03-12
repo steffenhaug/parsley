@@ -8,12 +8,19 @@ use std::collections::HashSet;
 /// dot is indicated by an index into the productions
 /// list of grammar symbols.
 #[derive(Hash, PartialEq, Eq, Clone)]
-pub struct LrItem {
+pub struct Item {
     pub(crate) production: Production,
     pub(crate) dot: usize,
 }
 
-impl LrItem {
+/// An item-set is symple a set of LR-items.
+pub type ItemSet = HashSet<Item>;
+
+impl Item {
+    pub fn singleton(self) -> ItemSet {
+        ItemSet::from([self])
+    }
+
     pub fn of(dot: usize, pr: &Production) -> Self {
         let symbol = pr.symbol.clone();
 
@@ -23,32 +30,37 @@ impl LrItem {
             //
             // FIXME: I tihnk we could avoid this special case if we dont encode
             // nullable productions with [ε] but instead empty string [].
-            return LrItem {
+            return Item {
                 production: Production { symbol, recipe: vec!() },
                 dot: 0
             };
         }
 
-        LrItem {
+        Item {
             production: pr.clone(),
             dot,
         }
     }
 }
 
-/// An item-set is symple a set of LR-items.
-pub type ItemSet = HashSet<LrItem>;
-
-pub enum LrAction {
+#[derive(Debug)]
+pub enum Action {
     Goto(usize),
     Reduce(usize),
     Shift(usize),
     Accept,
+    Error,
 }
 
+/* This will work once we get to generating code!
+#[derive(Debug)]
+struct State<const M: usize, const N: usize> {
+    actions: [Action; M],
+    gotos: [Action; N]
+}
+*/
 
-
-impl fmt::Display for LrItem {
+impl fmt::Display for Item {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{} ->", self.production.symbol)?;
 

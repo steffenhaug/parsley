@@ -5,38 +5,48 @@ use parsley::{bnf, Alphabet, Grammar};
 enum Sym {
     #[terminal("+")]
     Plus,
-    #[terminal("-")]
+    #[terminal("*")]
     Minus,
     #[terminal("n")]
     Integer,
+    #[terminal("(")]
+    ParOpen,
+    #[terminal(")")]
+    ParClose,
 }
 
-const GRAMMAR: &str = r"
-S : T
+parsley::grammar! {
+    type Sym;
 
-T : T + N
-  | T - N
-  | N
+    match E : E + T
+            | T
 
-N : n
+    match T : T * F
+            | F
+
+    match F : ( E )
+            | n
+}
+
+const GRAMMAR: &str = "
+E : E + T
+  | T
+
+T : T * F
+  | F
+
+F : ( E )
+  | n
 ";
 
 fn main() {
-    let grammar: Grammar<Sym> = bnf::parse(GRAMMAR, "S").unwrap();
+    let grammar: Grammar<Sym> = bnf::parse(GRAMMAR, "E").unwrap();
     println!("GRAMMAR");
     println!("{}", grammar);
 
-    println!("FORST/FOLLOW sets:");
-    let fst = grammar.first_sets();
-    let fol = grammar.follow_sets(&fst);
-    bnf::pretty_print_map(&fst, "FIRST");
-    bnf::pretty_print_map(&fol, "FOLLOW");
-
-    println!("LR items:");
-    for lri in grammar.all_lr_items() {
-        let closure = grammar.closure(&lri);
-        print!("CLOSURE({}) = ", lri);
-        bnf::pretty_print_set(&closure);
+    println!("Canonical LR(0) items:");
+    for set_of_lri in grammar.canonical_lr0_items() {
+        bnf::pretty_print_set(&grammar.kernel(&set_of_lri));
         println!();
     }
 }

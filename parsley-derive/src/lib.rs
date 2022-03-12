@@ -104,3 +104,16 @@ pub fn alphabet_derive(input: TokenStream) -> TokenStream {
 
     expanded.into()
 }
+
+
+
+
+#[proc_macro]
+pub fn grammar(_i: TokenStream) -> TokenStream {
+    dbg!(_i);
+    let g = quote! {
+
+    };
+
+    g.into()
+}
