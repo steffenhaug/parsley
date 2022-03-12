@@ -17,10 +17,8 @@
 /// Also, note the use of `Arc<str>` in place of `String`. The grammar symbols are used in a wide
 /// range of control structures, so it is very nice to be able to share them cheaply. `Arc<str>`
 /// saves a layer of indirection over `Arc<String>`.
-use crate::alphabet::Alphabet;
 use crate::bnf::{Grammar, Production, Symbol, Symbol::*};
 use crate::parser::Parser;
-use logos::Logos;
 use BnfToken::*;
 
 use std::collections::HashSet;
@@ -29,18 +27,12 @@ use std::sync::Arc;
 
 /// A token in a BNF grammar specification.
 /// Note that the legal names of grammar symbols is quite liberal.
-#[derive(Logos, Debug, Clone, PartialEq)]
-pub(crate) enum BnfToken {
-    #[token(":")]
+#[derive(Debug, Clone, PartialEq)]
+pub enum BnfToken {
     Colon,
-    #[token("|")]
     Pipe,
-    #[regex(r"[a-zA-Z!$\+*\-\^&</'=@>_~\(\)]+", |lex| lex.slice().to_owned() )]
     Symbol(String),
-    #[regex("\n\n")] // double newline separates rules
-    Separator,
-    #[error]
-    #[regex(r"[ \t\n]", logos::skip)]
+    Match,
     Error,
     Eof,
 }
@@ -48,12 +40,12 @@ pub(crate) enum BnfToken {
 /// A rule is simply the name of a symbol, and a list
 /// of the things that produce this symbol.
 #[derive(Debug)]
-pub(crate) struct Rule {
+pub struct Rule {
     symbol: Arc<str>,
     recipe: Vec<Arc<str>>,
 }
 
-/// The "dumb tree" is just a vector of rules!
+///semantic_analysis,  The "dumb tree" is just a vector of rules!
 type Rules = Vec<Rule>;
 
 /// Struct to own the AST while it's under construction.
@@ -68,18 +60,6 @@ pub struct BnfParser {
 /// Needs variants for parsing- and semantic errors.
 pub type BnfParseError = ();
 
-pub fn parse_bnf<A, S, T>(bnf: S, start_sym: T) -> Result<Grammar<A>, BnfParseError>
-where
-    A: Alphabet,
-    S: AsRef<str>,
-    T: AsRef<str>,
-{
-    // The AST is obtained by invoking the BNF parser.
-    let ast = BnfParser::new(bnf).parse()?;
-    // The Grammar proper is obtained by performing semantic analysis on the AST.
-    semantic_analysis(ast, start_sym.as_ref())
-}
-
 impl Parser<Rules> for BnfParser {
     type Error = BnfParseError;
 
@@ -90,9 +70,7 @@ impl Parser<Rules> for BnfParser {
 }
 
 impl BnfParser {
-    fn new(src: impl AsRef<str>) -> BnfParser {
-        // Lexing the entire token stream up front should not be problematic.
-        let tokens = BnfToken::lexer(src.as_ref()).into_iter().collect();
+    pub fn from_toks(tokens: Vec<BnfToken>) -> BnfParser {
         BnfParser {
             tokens,
             position: 0,
@@ -139,7 +117,7 @@ impl BnfParser {
     // locked to the world of DFAs.
     fn grammar(mut self) -> Result<Vec<Rule>, ()> {
         // As long as there are symbols in the token stream...
-        while let Symbol(_) = self.look() {
+        while let Match = self.look() {
             // Parse a rule and add it to the list of productions.
             let rule = self.rule()?;
             self.ast.extend(rule.into_iter());
@@ -160,6 +138,8 @@ impl BnfParser {
     // Again, we use a loop to implement the Kleene star.
     fn rule(&mut self) -> Result<Vec<Rule>, ()> {
         let mut productions = Vec::new();
+
+        self.match_tok(Match)?;
         let sym = self.match_sym()?;
         self.match_tok(Colon)?;
         productions.push(self.recipe(&sym)?);
@@ -167,10 +147,6 @@ impl BnfParser {
         while self.look() == Pipe {
             self.match_tok(Pipe)?;
             productions.push(self.recipe(&sym)?);
-        }
-
-        if self.look() == Separator {
-            self.match_tok(Separator)?;
         }
 
         Ok(productions)
@@ -197,10 +173,7 @@ impl BnfParser {
 
 /// Semantic analysis turns the list of rules into a proper
 /// grammar where important semantic information is determined.
-fn semantic_analysis<A>(rules: Rules, start_name: &str) -> Result<Grammar<A>, BnfParseError>
-where
-    A: Alphabet,
-{
+pub fn semantic_analysis(rules: Rules, start_name: &str) -> Result<Grammar, BnfParseError> {
     let mut terminals = HashSet::<Arc<str>>::new();
     let mut nonterminals = HashSet::<Arc<str>>::new();
     let mut productions = Vec::new();
@@ -214,7 +187,6 @@ where
     if !nonterminals.contains(start_name) {
         return Err(());
     }
-
 
     let start_sym = Nonterminal(start_name.to_string().into());
 
@@ -255,7 +227,6 @@ where
         terminals,
         productions,
         start_sym,
-        _a: std::marker::PhantomData,
     };
 
     Ok(g)

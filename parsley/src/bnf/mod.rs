@@ -2,31 +2,25 @@
 /// grammars in bnf form, such as computing FIRST- and FOLLOW-
 /// sets, creating LR-items, calculating closures of LR-items,
 /// and so on.
-mod bnf_parser;
+pub mod bnf_parser;
 
 use self::Symbol::*;
-use crate::alphabet::Alphabet;
 use crate::lr::{Item, ItemSet};
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
-// Re-export
-pub use bnf_parser::parse_bnf as parse;
-
 type Set = HashSet<Symbol>;
 type Map = HashMap<Symbol, Set>;
 
 /// Defines a grammar over the alphabet `A`.
 #[derive(Debug)]
-pub struct Grammar<A: Alphabet> {
+pub struct Grammar {
     nonterminals: Set,
     terminals: Set,
     start_sym: Symbol,
     productions: Vec<Production>,
-    // Marker so we can access static methods on `A` for semantic validation.
-    _a: std::marker::PhantomData<A>,
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
@@ -59,7 +53,7 @@ impl Symbol {
     }
 }
 
-impl<A: Alphabet> Grammar<A> {
+impl Grammar {
     /// Find all rules in the grammar that produces `sym`.
     pub fn productions_for<'a>(&'a self, sym: &'a Symbol) -> impl Iterator<Item = &'a Production> {
         self.productions.iter().filter(|p| p.symbol == *sym)
@@ -375,7 +369,7 @@ impl fmt::Display for Production {
     }
 }
 
-impl<A: Alphabet> fmt::Display for Grammar<A> {
+impl fmt::Display for Grammar {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // Write productions.
         for rule in &self.productions {

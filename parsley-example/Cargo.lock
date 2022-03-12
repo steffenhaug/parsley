@@ -53,13 +53,13 @@ version = "0.1.0"
 dependencies = [
  "ansi_term",
  "logos",
- "parsley-derive",
 ]
 
 [[package]]
 name = "parsley-derive"
 version = "0.1.0"
 dependencies = [
+ "parsley",
  "proc-macro2",
  "quote",
  "syn",
@@ -71,6 +71,7 @@ version = "0.1.0"
 dependencies = [
  "logos",
  "parsley",
+ "parsley-derive",
 ]
 
 [[package]]

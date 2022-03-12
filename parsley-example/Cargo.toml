@@ -7,4 +7,5 @@ edition = "2021"
 
 [dependencies]
 logos="0.12.0"
+parsley-derive = { path = "../parsley-derive" }
 parsley = { path = "../parsley" }
