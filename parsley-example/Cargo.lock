@@ -24,6 +24,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
+name = "lazy_static"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
+
+[[package]]
 name = "logos"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -59,6 +65,7 @@ dependencies = [
 name = "parsley-derive"
 version = "0.1.0"
 dependencies = [
+ "lazy_static",
  "parsley",
  "proc-macro2",
  "quote",
@@ -69,6 +76,7 @@ dependencies = [
 name = "parsley-example"
 version = "0.1.0"
 dependencies = [
+ "lazy_static",
  "logos",
  "parsley",
  "parsley-derive",

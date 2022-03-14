@@ -17,8 +17,8 @@ type Map = HashMap<Symbol, Set>;
 /// Defines a grammar over the alphabet `A`.
 #[derive(Debug)]
 pub struct Grammar {
-    nonterminals: Set,
-    terminals: Set,
+    pub nonterminals: Set,
+    pub terminals: Set,
     start_sym: Symbol,
     productions: Vec<Production>,
 }

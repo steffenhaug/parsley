@@ -52,13 +52,17 @@ pub enum Action {
     Error,
 }
 
-/* This will work once we get to generating code!
+#[allow(dead_code)] // This will be compiled by a proc macro.
 #[derive(Debug)]
-struct State<const M: usize, const N: usize> {
-    actions: [Action; M],
-    gotos: [Action; N]
+pub struct State<const M: usize, const N: usize> {
+    pub actions: [Action; M],
+    pub gotos: [Action; N]
 }
-*/
+
+#[allow(dead_code)] // This will be compiled by a proc macro.
+pub struct LrTable<const M: usize, const N: usize, const K: usize> {
+    pub states: [State<M, N>; K]
+}
 
 impl fmt::Display for Item {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

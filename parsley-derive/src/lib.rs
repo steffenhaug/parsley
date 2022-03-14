@@ -1,7 +1,14 @@
 extern crate proc_macro;
+#[macro_use]
+extern crate lazy_static;
+
+// TODO: make new modules and only use proc_macro2-things.
+// the proc-macro vs proc-macro2 name conflicts are actually
+// very irritating, so i tihnk thats the best move.
 
 use parsley::bnf::bnf_parser::{semantic_analysis, BnfParser, BnfToken, BnfToken::*};
 use parsley::bnf::pretty_print_set;
+use parsley::lr::Action;
 use parsley::parser::Parser;
 use proc_macro::TokenStream;
 use proc_macro2::{Literal, TokenTree};
@@ -9,7 +16,16 @@ use quote::quote;
 use std::mem;
 use syn::{Data, DataEnum, DeriveInput, Fields, Ident, Variant};
 
-fn extract_variant_info(v: &mut Variant) -> Option<(Literal, Ident, Fields)> {
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+lazy_static! {
+    // Database of terminals in the language.
+    static ref TERMINALS: Mutex<HashMap<String, usize>> = Mutex::new(HashMap::new());
+    static ref HAVE_WE_PARSED_AN_ALPHABET: Mutex<bool> = Mutex::new(false);
+}
+
+fn extract_variant_info(v: &mut Variant) -> Option<(String, Ident, Fields)> {
     let Variant {
         attrs,
         ident,
@@ -31,7 +47,12 @@ fn extract_variant_info(v: &mut Variant) -> Option<(Literal, Ident, Fields)> {
             // First token in the group should be a literal...
             if let Some(TokenTree::Group(g)) = tokens.into_iter().next() {
                 if let Some(TokenTree::Literal(l)) = g.stream().into_iter().next() {
-                    return Some((l, ident.clone(), fields.clone()));
+                    let quoted = l.to_string();
+                    return Some((
+                        quoted[1..quoted.len() - 1].to_owned(),
+                        ident.clone(),
+                        fields.clone(),
+                    ));
                 }
             }
         }
@@ -43,67 +64,62 @@ fn extract_variant_info(v: &mut Variant) -> Option<(Literal, Ident, Fields)> {
 
 #[proc_macro_derive(Alphabet, attributes(terminal))]
 pub fn alphabet_derive(input: TokenStream) -> TokenStream {
+    // Check if we already defined an alphabet.
+    let mut alphabet_defined = HAVE_WE_PARSED_AN_ALPHABET.lock().unwrap();
+    if *alphabet_defined {
+        panic!("only supporting one alphabet type for now")
+    }
+
+    // Supporting multiple different alphabets could give conflicts
+    // in the terminal symbol table, so this would need some extra
+    // book-keeping. Definitely not too tricky, but not a priority.
+
     let ast = syn::parse_macro_input!(input as DeriveInput);
 
     let DeriveInput { ident, data, .. } = ast;
 
     // Extract the relevant info about the enum variants from the tree.
     // (terminals in the grammar, identifier and fields)
-    let variants: Vec<(Literal, Ident, Fields)> =
-        if let Data::Enum(DataEnum { variants, .. }) = data {
-            variants
-                .into_iter()
-                .filter_map(|mut v| extract_variant_info(&mut v))
-                .collect()
-        } else {
-            panic!("Only enums can derive Alphabet!");
-        };
+    let variants: Vec<(String, Ident, Fields)> = if let Data::Enum(DataEnum { variants, .. }) = data
+    {
+        variants
+            .into_iter()
+            .filter_map(|mut v| extract_variant_info(&mut v))
+            .collect()
+    } else {
+        panic!("Only enums can derive Alphabet!");
+    };
 
-    // The match arms for string -> id like "abc" => Some(3)
-    let match_arms_from_str: proc_macro2::TokenStream = variants
-        .iter()
-        .enumerate()
-        .map(|(n, (l, _, _))| {
-            // Let's keep it simple and only do one for now.
-            // We should really zip over ls with n and flatten.
-            quote! { #l => Some(#n), }
-        })
-        .collect();
+    let mut symtab = TERMINALS.lock().unwrap();
 
-    // Match arms for self -> id
+    for (seq, (literal, _, _)) in variants.iter().enumerate() {
+        // Unquote the string-literals value and add it to the symbol database.
+        symtab.insert(literal.to_string(), seq);
+    }
+
     let match_arms: proc_macro2::TokenStream = variants
         .iter()
-        .enumerate()
-        .map(|(n, (_, id, fs))| match fs {
-            Fields::Unit => quote! { #ident :: #id     => Some(#n), },
-            Fields::Unnamed(_) => quote! { #ident :: #id (_) => Some(#n), },
-            Fields::Named(_) => panic!("Named fields are supported!"),
+        .map(|(lit, id, fs)| {
+            let n = symtab[lit];
+            match fs {
+                Fields::Unit => quote! { #ident :: #id     => #n, },
+                Fields::Unnamed(_) => quote! { #ident :: #id (_) => #n, },
+                Fields::Named(_) => panic!("Named fields are supported!"),
+            }
         })
         .collect();
-
-    let n_variants = variants.len();
 
     let expanded = quote! {
         impl Alphabet for #ident {
-            fn lr_id_from_str(terminal: &str) -> Option<usize> {
-                match terminal {
-                    #match_arms_from_str
-                    t  => None
-                }
-            }
-
-            fn lr_id(&self) -> Option<usize> {
+            fn id(&self) -> usize {
                 match self {
                     #match_arms
-                    &_ => None
                 }
-            }
-
-            fn n_lr_ids(&self) -> usize {
-                #n_variants
             }
         }
     };
+
+    *alphabet_defined = true;
 
     expanded.into()
 }
@@ -112,10 +128,15 @@ pub fn alphabet_derive(input: TokenStream) -> TokenStream {
 /// our BNF grammar parser.
 fn to_bnf_token(tok: proc_macro::TokenTree) -> BnfToken {
     use proc_macro::TokenTree::{Ident, Literal, Punct};
+
     let tok_str = match tok {
         Ident(ident, ..) => ident.to_string(),
         Punct(ch, ..) => ch.to_string(),
-        Literal(symbol, ..) => symbol.to_string(),
+        Literal(symbol, ..) => {
+            // Remove quotes
+            let symbol = symbol.to_string();
+            String::from(&symbol[1..symbol.len() - 1])
+        }
         _ => return Error,
     };
 
@@ -155,14 +176,14 @@ pub fn grammar(input: TokenStream) -> TokenStream {
     // find it in our own custom token stream, so this will
     // do for now.
 
-    let ty: String = {
+    let ty = {
         let tydecl = tokens.drain(tydecl_at..tydecl_at + 2);
         let ty = if let Some(Symbol(ty_sym)) = tydecl.skip(1).next() {
             ty_sym
         } else {
             panic!("alphbet type must be valid rust struct/enum name")
         };
-        ty
+        proc_macro2::Ident::new(&ty, proc_macro2::Span::call_site())
     };
 
     let start_at = tokens
@@ -193,6 +214,26 @@ pub fn grammar(input: TokenStream) -> TokenStream {
         pretty_print_set(&grammar.kernel(it));
         println!();
     }
+
+    let m = grammar.terminals.len();
+    let n = grammar.nonterminals.len();
+    let k = lr_items.len();
+
+    let mut action: Vec<Vec<_>> = Vec::new();
+    let mut goto: Vec<Vec<_>> = Vec::new();
+
+    // Fill the table with error by default.
+    // Note how this works: The table has quoted rust code that
+    // represents the error action.
+    for _ in 0..k {
+        action.push((0..m).map(|_| quote! { Action::Error }).collect());
+        goto.push((0..n).map(|_| quote! { Action::Error }).collect());
+    }
+
+    // Now that we are ready to compile the table, we need the symtab.
+    let symtab = TERMINALS.lock().unwrap();
+
+    dbg!(&symtab);
 
     let g = quote! {};
 
