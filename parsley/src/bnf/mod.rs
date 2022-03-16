@@ -25,8 +25,8 @@ pub struct Grammar {
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct Production {
-    pub(crate) symbol: Symbol,
-    pub(crate) recipe: Vec<Symbol>,
+    pub symbol: Symbol,
+    pub recipe: Vec<Symbol>,
 }
 
 impl Production {

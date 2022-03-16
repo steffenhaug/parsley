@@ -11,6 +11,5 @@ enum Sym {
 }
 
 fn main() {
-    println!("Look at the proc macro output!");
-    dbg!(Sym::Plus.id());
+    println!("{}", lr_table_scope::LR_TABLE);
 }
