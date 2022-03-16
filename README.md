@@ -14,29 +14,19 @@ can be implemented with a derive-macro (we are just making some big `match`es).
 
 With some helper attributes `#[terminal(_____)]` on our enum variants,
 we can auto-derive this correspondence.
-So for example, using in combination with the brilliant Logos lexer generator,
-you can specify your alphabets symbols with an `enum` like so:
+So for example, you can specify your alphabets symbols with an `enum` like so:
 ```Rust
-#[derive(Alphabet, Logos)]
+#[derive(Alphabet)]
+#[grammar("src/grammar.parsley")]
 enum Sym {
-    #[terminal("n")]
-    #[regex(r"[0-9]+", |lex| lex.slice().parse())]
-    N(i32),
-    #[terminal("+")] 
-    #[token("+")]
-    Plus,
-    #[terminal("-")] 
-    #[token("-")]
-    Minus,
-    #[error] 
-    #[regex(r" \t\n", logos::skip)]
-    Error,
+    #[terminal("+")] Plus,
+    #[terminal("-")] Minus,
+    #[terminal("n")] Integer,
 }
 ```
 indicating that your language has integers, plus symbols and minus symbols.
-Together with a grammar like this:
-```Rust
-const GRAMMAR: &str = r"
+Together with a grammar-file like this:
+```
 S : T
 
 T : T + T
@@ -44,8 +34,15 @@ T : T + T
   | N
 
 N : n
-";
 ```
+We can know that `+`, `-` and `n` are terminals, and we know that items
+on the LHS of productions `S`, `T`, and `N` are non-terminals. So if the
+left-over symbols in the grammar coincides with the terminals tagged on
+the enum, we are good to go.
+All this can be checked in the derive-macro.
+
+Your grammar-symbol enum may of course also derive `Logos` from the brilliant
+`logos`-crate to also automatically get a good lexer.
+
 And note that the symbols are not required to be valid rust identifiers:
-They can not be completely arbitrary, but a lot of symbols are allowed
-(regex is `[a-zA-Z!$\+\-\^&<*/'=?@>_~]+`).
+They can not be completely arbitrary, but a lot of symbols are allowed.

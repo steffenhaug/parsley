@@ -19,7 +19,7 @@ type Map = HashMap<Symbol, Set>;
 pub struct Grammar {
     pub nonterminals: Set,
     pub terminals: Set,
-    start_sym: Symbol,
+    start_sym: Option<Symbol>,
     productions: Vec<Production>,
 }
 
@@ -191,7 +191,9 @@ impl Grammar {
 
         // Rule #1: Start with $ as the follow of the start symbol.
         for nt in &self.nonterminals {
-            let initial_set = if *nt == self.start_sym {
+            // If there are non-terminals, per definition the start symbol exists,
+            // since we assumed the start symbol to be the first non-terminal.
+            let initial_set = if *nt == self.start_sym.clone().expect("infallible") {
                 Dollar.singleton()
             } else {
                 Set::new()
@@ -299,9 +301,14 @@ impl Grammar {
     }
 
     pub fn augmented_start(&self) -> Production {
+        let start = self
+            .start_sym
+            .clone()
+            .expect("no start sym (fix this panic)");
+
         Production {
-            symbol: Nonterminal(format!("{}'", self.start_sym).into()),
-            recipe: vec![self.start_sym.clone()],
+            symbol: Nonterminal(format!("{}'", start).into()),
+            recipe: vec![start.clone()],
         }
     }
 
@@ -376,7 +383,7 @@ impl fmt::Display for Grammar {
             writeln!(f, "{}", rule)?;
         }
 
-        writeln!(f, "Start symbol: {}", self.start_sym)?;
+        writeln!(f, "Start symbol: {:?}", self.start_sym)?;
 
         // Write non-terminals.
         write!(f, "Non-terminals:")?;

@@ -1,32 +1,13 @@
 use parsley::alphabet::Alphabet;
-use parsley_derive::{grammar, Alphabet};
+use parsley_derive::Alphabet;
 
 #[allow(dead_code)]
-#[derive(Alphabet, PartialEq, Eq, Hash)]
+#[derive(Alphabet)]
+#[grammar("src/grammar.parsley")]
 enum Sym {
-    #[terminal("+")]
-    Plus,
-    #[terminal("*")]
-    Minus,
-    #[terminal("n")]
-    Integer,
-    #[terminal("(")]
-    ParOpen,
-    #[terminal(")")]
-    ParClose,
-}
-
-grammar! {
-    type Sym
-
-    start E : E "+" T
-            | T
-
-    match T : T "*" F
-            | F
-
-    match F : "(" E ")"
-            | n
+    #[terminal("+")] Plus,
+    #[terminal("-")] Minus,
+    #[terminal("n")] Integer,
 }
 
 fn main() {

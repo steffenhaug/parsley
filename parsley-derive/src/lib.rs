@@ -11,10 +11,10 @@ use parsley::bnf::pretty_print_set;
 use parsley::lr::Action;
 use parsley::parser::Parser;
 use proc_macro::TokenStream;
-use proc_macro2::{Literal, TokenTree};
+use proc_macro2::TokenTree;
 use quote::quote;
 use std::mem;
-use syn::{Data, DataEnum, DeriveInput, Fields, Ident, Variant};
+use syn::{Attribute, Data, DataEnum, DeriveInput, Fields, Ident, Variant};
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -25,6 +25,33 @@ lazy_static! {
     static ref HAVE_WE_PARSED_AN_ALPHABET: Mutex<bool> = Mutex::new(false);
 }
 
+fn find_attributes_named<'a, A>(attrs: A, name: &str) -> Vec<&'a Attribute>
+where
+    A: IntoIterator<Item = &'a Attribute>,
+{
+    attrs
+        .into_iter()
+        .filter(|attr| attr.path.is_ident(name))
+        .collect()
+}
+
+fn string_in_parens<'a, T>(toks: T) -> Option<String>
+where
+    T: IntoIterator<Item = &'a TokenTree>,
+{
+    if let Some(TokenTree::Group(g)) = toks.into_iter().next() {
+        if let Some(TokenTree::Literal(l)) = g.stream().into_iter().next() {
+            // Turn the literal into a String. Since this is a string literal, the
+            // token will be something like "\"foobar\"". So we have to so some
+            // ugly hacking. I don't think this covers the general case but oh well.
+            let quoted = l.to_string();
+            return Some(quoted[1..quoted.len() - 1].into());
+        }
+    }
+
+    None
+}
+
 fn extract_variant_info(v: &mut Variant) -> Option<(String, Ident, Fields)> {
     let Variant {
         attrs,
@@ -33,27 +60,19 @@ fn extract_variant_info(v: &mut Variant) -> Option<(String, Ident, Fields)> {
         ..
     } = v;
 
-    for attr in attrs {
-        let name = if let Some(name) = attr.path.get_ident() {
-            name.to_string()
-        } else {
-            continue;
-        };
+    for attr in find_attributes_named(&*attrs, "terminal") {
+        // Steal the tokens from the token stream
+        let tokens = attr.tokens.clone();
 
-        if name == "terminal" {
-            // Steal the tokens from the token stream
-            let tokens = mem::replace(&mut attr.tokens, proc_macro2::TokenStream::new());
-
-            // First token in the group should be a literal...
-            if let Some(TokenTree::Group(g)) = tokens.into_iter().next() {
-                if let Some(TokenTree::Literal(l)) = g.stream().into_iter().next() {
-                    let quoted = l.to_string();
-                    return Some((
-                        quoted[1..quoted.len() - 1].to_owned(),
-                        ident.clone(),
-                        fields.clone(),
-                    ));
-                }
+        // First token in the group should be a literal...
+        if let Some(TokenTree::Group(g)) = tokens.into_iter().next() {
+            if let Some(TokenTree::Literal(l)) = g.stream().into_iter().next() {
+                let quoted = l.to_string();
+                return Some((
+                    quoted[1..quoted.len() - 1].to_owned(),
+                    ident.clone(),
+                    fields.clone(),
+                ));
             }
         }
     }
@@ -62,7 +81,7 @@ fn extract_variant_info(v: &mut Variant) -> Option<(String, Ident, Fields)> {
     None
 }
 
-#[proc_macro_derive(Alphabet, attributes(terminal))]
+#[proc_macro_derive(Alphabet, attributes(terminal, grammar))]
 pub fn alphabet_derive(input: TokenStream) -> TokenStream {
     // Check if we already defined an alphabet.
     let mut alphabet_defined = HAVE_WE_PARSED_AN_ALPHABET.lock().unwrap();
@@ -76,7 +95,22 @@ pub fn alphabet_derive(input: TokenStream) -> TokenStream {
 
     let ast = syn::parse_macro_input!(input as DeriveInput);
 
-    let DeriveInput { ident, data, .. } = ast;
+    let DeriveInput {
+        ident, data, attrs, ..
+    } = ast;
+
+    // Get the name of the grammar file from the first grammar("___") attribute.
+    let grammar_attrs = find_attributes_named(&attrs, "grammar");
+    let grammar_file: Option<String> = grammar_attrs.first().map(|g| {
+        g.parse_args::<syn::LitStr>()
+            // If there _was_ some literal, but it's not a string, we panic.
+            // If there was _no_ literal, `.map` would skip this with the None variant.
+            .expect("grammar file must be a string literal")
+            .value()
+    });
+
+    // This is now something sensible:
+    //     dbg!(&grammar_file);
 
     // Extract the relevant info about the enum variants from the tree.
     // (terminals in the grammar, identifier and fields)
@@ -109,7 +143,20 @@ pub fn alphabet_derive(input: TokenStream) -> TokenStream {
         })
         .collect();
 
+    // Now we no longer need the symtab.
+    drop(symtab);
+
+    // Indicate that an alphabet have been defined, since the symbol table
+    // can not currently be re-used.
+    *alphabet_defined = true;
+
+    let lrtab_module = grammar_file.map_or( quote! {}, |file| {
+        let src = std::fs::read_to_string(file).expect("could not read grammar file");
+        compile_lr_table(src)
+    });
+
     let expanded = quote! {
+        #[automatically_derived]
         impl Alphabet for #ident {
             fn id(&self) -> usize {
                 match self {
@@ -117,97 +164,24 @@ pub fn alphabet_derive(input: TokenStream) -> TokenStream {
                 }
             }
         }
-    };
 
-    *alphabet_defined = true;
+        #lrtab_module
+    };
 
     expanded.into()
 }
 
-/// Turn a stream of Rust-tokens into tokens that we can parse with
-/// our BNF grammar parser.
-fn to_bnf_token(tok: proc_macro::TokenTree) -> BnfToken {
-    use proc_macro::TokenTree::{Ident, Literal, Punct};
-
-    let tok_str = match tok {
-        Ident(ident, ..) => ident.to_string(),
-        Punct(ch, ..) => ch.to_string(),
-        Literal(symbol, ..) => {
-            // Remove quotes
-            let symbol = symbol.to_string();
-            String::from(&symbol[1..symbol.len() - 1])
-        }
-        _ => return Error,
-    };
-
-    match &tok_str[..] {
-        "match" => Match,
-        ":" => Colon,
-        "|" => Pipe,
-        sym => Symbol(sym.to_string()),
-    }
-}
-
-#[proc_macro]
-pub fn grammar(input: TokenStream) -> TokenStream {
-    let mut tokens: Vec<BnfToken> = input
-        .into_iter()
-        .map(to_bnf_token)
-        .chain([Eof].into_iter())
-        .collect();
-
-    // Find a type declaration.
-    let tydecl_at = tokens
-        .iter()
-        .position(|tok| *tok == Symbol("type".to_owned()));
-
-    let tydecl_at = if let Some(p) = tydecl_at {
-        p
-    } else {
-        panic!("no alphabet type declaraction")
-    };
-
-    // Remove type declaration from the token stream.
-    // This has to happen at the proc-macro level before we
-    // give over the token stream to the parser. We get it
-    // as a string, which is very roundabout since it was
-    // originialy a rust identifier, and we need to turn it
-    // into a rust-identifier again, but it is easier to
-    // find it in our own custom token stream, so this will
-    // do for now.
-
-    let ty = {
-        let tydecl = tokens.drain(tydecl_at..tydecl_at + 2);
-        let ty = if let Some(Symbol(ty_sym)) = tydecl.skip(1).next() {
-            ty_sym
-        } else {
-            panic!("alphbet type must be valid rust struct/enum name")
-        };
-        proc_macro2::Ident::new(&ty, proc_macro2::Span::call_site())
-    };
-
-    let start_at = tokens
-        .iter()
-        .position(|tok| *tok == Symbol("start".to_owned()))
-        .expect("no start symbol");
-
-    // Now that we know which is the start, replace with a normal match.
-    tokens[start_at] = Match;
-
-    let start: String = if let Symbol(start_sym) = &tokens[start_at + 1] {
-        start_sym.to_owned()
-    } else {
-        panic!("start must be a valid nonterminal");
-    };
-
-    let ast = BnfParser::from_toks(tokens)
+fn compile_lr_table(src: String) -> proc_macro2::TokenStream {
+    let ast = BnfParser::from_src(&src)
         .parse()
         .expect("failed to parse grammar");
 
-    let grammar = semantic_analysis(ast, &start).expect("semantic error in grammar");
+    let grammar = semantic_analysis(ast).expect("semantic error in grammar");
     let fst = grammar.first_sets();
     let fol = grammar.follow_sets(&fst);
     let lr_items = grammar.canonical_lr0_items();
+
+    parsley::bnf::pretty_print_map(&fol, "FOLLOW SETS:");
 
     println!("Canonical LR(0) items:");
     for it in &lr_items {
@@ -215,27 +189,48 @@ pub fn grammar(input: TokenStream) -> TokenStream {
         println!();
     }
 
+    // Now that we are ready to compile the table, we need the symtab.
+    let symtab = TERMINALS.lock().unwrap();
+
     let m = grammar.terminals.len();
     let n = grammar.nonterminals.len();
     let k = lr_items.len();
 
-    let mut action: Vec<Vec<_>> = Vec::new();
-    let mut goto: Vec<Vec<_>> = Vec::new();
+    // We have K states, each with M actions and N gotos.
+    // Note, we don't have a column for $, because we can check for
+    // eof by seeing if the input stream has no more items. might change that.
+    // The easiest thing to do is to maintain two separate tables for now.
+    //
+    // Note that these tables are tables of _quoted rust code_! After computing
+    // the table (of code) the table will be compiled into code compiling into
+    // a LR parsing table, so we can have the table completely in the programs
+    // data segment of the program so we get good performance.
+    let mut act: Vec<Vec<_>> = (0..k)
+        .map(|_| (0..m).map(|_| quote!(Action::Error)).collect())
+        .collect();
 
-    // Fill the table with error by default.
-    // Note how this works: The table has quoted rust code that
-    // represents the error action.
-    for _ in 0..k {
-        action.push((0..m).map(|_| quote! { Action::Error }).collect());
-        goto.push((0..n).map(|_| quote! { Action::Error }).collect());
+    let mut go: Vec<Vec<_>> = (0..k)
+        .map(|_| (0..n).map(|_| quote!(Action::Error)).collect())
+        .collect();
+
+    // So for example, now something like this is valid.
+    act[0][symtab["n"]] = quote!(Action::Shift(5));
+
+    // Write `State`s for each state `i`.
+    let states = (0..k).map(|i|{
+        let (a, g) = (&act[i], &go[i]);
+        quote! {
+            State { actions: [ #(#a),* ], gotos: [ #(#g),*] }
+        }
+    });
+
+    quote! {
+        mod lr_table_scope {
+            use parsley::lr::*;
+            // Put the states into a Kx(M+N) LR table.
+            pub const LR_TABLE: LrTable<#k, #m, #n> = LrTable {
+                states: [ #(#states),* ]
+            };
+        }
     }
-
-    // Now that we are ready to compile the table, we need the symtab.
-    let symtab = TERMINALS.lock().unwrap();
-
-    dbg!(&symtab);
-
-    let g = quote! {};
-
-    g.into()
 }

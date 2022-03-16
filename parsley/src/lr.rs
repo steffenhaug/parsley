@@ -60,7 +60,7 @@ pub struct State<const M: usize, const N: usize> {
 }
 
 #[allow(dead_code)] // This will be compiled by a proc macro.
-pub struct LrTable<const M: usize, const N: usize, const K: usize> {
+pub struct LrTable<const K: usize, const M: usize, const N: usize> {
     pub states: [State<M, N>; K]
 }
 

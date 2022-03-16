@@ -19,20 +19,26 @@
 /// saves a layer of indirection over `Arc<String>`.
 use crate::bnf::{Grammar, Production, Symbol, Symbol::*};
 use crate::parser::Parser;
-use BnfToken::*;
-
+use logos::Logos;
 use std::collections::HashSet;
 use std::mem;
 use std::sync::Arc;
+use BnfToken::*;
 
 /// A token in a BNF grammar specification.
 /// Note that the legal names of grammar symbols is quite liberal.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Logos, Debug, Clone, PartialEq)]
 pub enum BnfToken {
+    #[token(":")]
     Colon,
+    #[token("|")]
     Pipe,
+    #[regex(r"[a-zA-Z!$\+*\-\^&</'=@>_~\(\)]+", |lex| lex.slice().to_owned() )]
     Symbol(String),
-    Match,
+    #[regex("\n\n")] // double newline separates rules
+    Separator,
+    #[error]
+    #[regex(r"[ \t\n]", logos::skip)]
     Error,
     Eof,
 }
@@ -70,6 +76,15 @@ impl Parser<Rules> for BnfParser {
 }
 
 impl BnfParser {
+    pub fn from_src(src: &str) -> BnfParser {
+        let toks = BnfToken::lexer(src)
+            .into_iter()
+            .chain([Eof]) // Add on Eof
+            .collect();
+
+        Self::from_toks(toks)
+    }
+
     pub fn from_toks(tokens: Vec<BnfToken>) -> BnfParser {
         BnfParser {
             tokens,
@@ -117,7 +132,7 @@ impl BnfParser {
     // locked to the world of DFAs.
     fn grammar(mut self) -> Result<Vec<Rule>, ()> {
         // As long as there are symbols in the token stream...
-        while let Match = self.look() {
+        while let Symbol(_) = self.look() {
             // Parse a rule and add it to the list of productions.
             let rule = self.rule()?;
             self.ast.extend(rule.into_iter());
@@ -138,8 +153,6 @@ impl BnfParser {
     // Again, we use a loop to implement the Kleene star.
     fn rule(&mut self) -> Result<Vec<Rule>, ()> {
         let mut productions = Vec::new();
-
-        self.match_tok(Match)?;
         let sym = self.match_sym()?;
         self.match_tok(Colon)?;
         productions.push(self.recipe(&sym)?);
@@ -147,6 +160,10 @@ impl BnfParser {
         while self.look() == Pipe {
             self.match_tok(Pipe)?;
             productions.push(self.recipe(&sym)?);
+        }
+
+        if self.look() == Separator {
+            self.match_tok(Separator)?;
         }
 
         Ok(productions)
@@ -173,22 +190,21 @@ impl BnfParser {
 
 /// Semantic analysis turns the list of rules into a proper
 /// grammar where important semantic information is determined.
-pub fn semantic_analysis(rules: Rules, start_name: &str) -> Result<Grammar, BnfParseError> {
+pub fn semantic_analysis(rules: Rules) -> Result<Grammar, BnfParseError> {
     let mut terminals = HashSet::<Arc<str>>::new();
     let mut nonterminals = HashSet::<Arc<str>>::new();
     let mut productions = Vec::new();
+    let mut start_sym = None;
 
     // First step of semantic analysis: Find the non-temrinals.
-    for Rule { symbol, .. } in &rules {
+    for (i, Rule { symbol, .. }) in rules.iter().enumerate() {
         nonterminals.insert(symbol.clone());
-    }
 
-    // Check that the start symbol is actually a valid nonterminal.
-    if !nonterminals.contains(start_name) {
-        return Err(());
+        // LHS Symbol of the first rule is assumed to be the start symbol.
+        if i == 0 {
+            start_sym.replace(Nonterminal(symbol.clone()));
+        }
     }
-
-    let start_sym = Nonterminal(start_name.to_string().into());
 
     // Second step of semantic analysis:
     // For all the rules, identify terminals and non-terminals on the right-hand side.
