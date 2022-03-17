@@ -46,3 +46,22 @@ Your grammar-symbol enum may of course also derive `Logos` from the brilliant
 
 And note that the symbols are not required to be valid rust identifiers:
 They can not be completely arbitrary, but a lot of symbols are allowed.
+
+The LR table is compiled to (very ugly) Rust-code that includes the table
+in its own module. Inspecting the compiled code can be done with `cargo expand`,
+but is gonna be pretty annoying to read. The table can instaed be printed at
+runtime, as it implements `fmt:Display`.
+The output will look something like
+```
+State | Action              | Goto           | Note
+      | +    -    n    $    | T    S    N    | 
+    0 | ·    ·    S4   ·    | G1   G2   G3   | {S -> · T, S' -> · S, T -> · N, T -> · T - N, T -> · T + N, N -> · n}
+    1 | S6   S5   ·    R    | ·    ·    ·    | {T -> T · + N, T -> T · - N, S -> T ·}
+    2 | ·    ·    ·    ·    | ·    ·    ·    | {S' -> S ·}
+    3 | R    R    ·    R    | ·    ·    ·    | {T -> N ·}
+    4 | R    R    ·    R    | ·    ·    ·    | {N -> n ·}
+    5 | ·    ·    S4   ·    | ·    ·    G7   | {T -> T - · N, N -> · n}
+    6 | ·    ·    S4   ·    | ·    ·    G8   | {T -> T + · N, N -> · n}
+    7 | R    R    ·    R    | ·    ·    ·    | {T -> T - N ·}
+    8 | R    R    ·    R    | ·    ·    ·    | {T -> T + N ·}
+```
