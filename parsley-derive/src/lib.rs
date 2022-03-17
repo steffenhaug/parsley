@@ -272,9 +272,14 @@ fn compile_lr_table(src: String) -> proc_macro2::TokenStream {
         }
 
         // 4. Convert None to Error (TODO after conflict checking)
+
     }
 
-    // 5. Find start state.
+    let start_state = c.iter().position(|i_i| {
+        i_i.contains(&grammar.start_item())
+    }).expect("could not find start item");
+
+
 
 
     // Write `State`s for each state `i`.
@@ -305,7 +310,8 @@ fn compile_lr_table(src: String) -> proc_macro2::TokenStream {
             pub const LR_TABLE: LrTable<#k, {#m+1}, #n> = LrTable {
                 t_sym_descr: [ #(#t_descrs),* ],
                 nt_sym_descr: [ #(#nt_descrs),* ],
-                states: [ #(#states),* ]
+                states: [ #(#states),* ],
+                start_state: #start_state,
             };
         }
     }

@@ -106,6 +106,7 @@ pub struct LrTable<const K: usize, const M: usize, const N: usize> {
     pub t_sym_descr: [&'static str; M],
     pub nt_sym_descr: [&'static str; N],
     pub states: [State<M, N>; K],
+    pub start_state: usize,
 }
 
 impl fmt::Display for Item {
@@ -168,7 +169,13 @@ impl<const K: usize, const M: usize, const N: usize> fmt::Display for LrTable<K,
 
         // Print the table itself.
         for state in &self.states {
-            write!(f, "{:>5} | ", state.state)?;
+            // Mark the start state.
+            if state.state == self.start_state {
+                write!(f, "{:>5} | ", format!("*{}", state.state))?;
+            } else {
+                write!(f, "{:>5} | ", state.state)?;
+            }
+
             for ac in &state.actions {
                 if let Action::Error = ac {
                     // Color the entry red:

@@ -321,6 +321,12 @@ impl Grammar {
         Item { production, dot }
     }
 
+    pub fn start_item(&self) -> Item {
+        let production = self.augmented_start();
+        let dot = 0;
+        Item { production, dot }
+    }
+
     pub fn kernel(&self, i: &ItemSet) -> ItemSet {
         let s = self.augmented_start().lr_item(); // S' -> ·S
         let k = i
