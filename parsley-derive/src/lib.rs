@@ -167,13 +167,9 @@ fn compile_lr_table(src: String) -> proc_macro2::TokenStream {
 
     // todo: replace with options(tokenstream) and leave none, so we can
     // check for confclicts. cant compare tokenstreams, so doesnt work atm
-    let mut action: Vec<Vec<_>> = (0..k)
-        .map(|_| (0..m + 1).map(|_| quote!(Action::Error)).collect())
-        .collect();
+    let mut action: Vec<Vec<_>> = (0..k).map(|_| (0..m + 1).map(|_| None).collect()).collect();
 
-    let mut goto: Vec<Vec<_>> = (0..k)
-        .map(|_| (0..n).map(|_| quote!(Action::Error)).collect())
-        .collect();
+    let mut goto: Vec<Vec<_>> = (0..k).map(|_| (0..n).map(|_| None).collect()).collect();
 
     // So for example, now something like this is valid:
     //     act[0][symtab["n"]] = quote!(Action::Shift(5));
@@ -230,7 +226,7 @@ fn compile_lr_table(src: String) -> proc_macro2::TokenStream {
 
             // Find the next state i_j, where GOTO(i_i, a) == i_j.
             if let Some(j) = c.iter().position(|i_j| goto == *i_j) {
-                action[i][symtab[a]] = quote!(Action::Shift(#j));
+                action[i][symtab[a]].replace(quote!(Action::Shift(#j)));
             }
         }
 
@@ -247,19 +243,21 @@ fn compile_lr_table(src: String) -> proc_macro2::TokenStream {
             let sym = nts.iter().position(|name| *name == a);
 
             // For all x in FOLLOW(A), act[i, x] = Reduce A -> β.
-            // Note that the reduction is encoded not by reduction #, but by
+            // Note that the reduction is encoded not by jkreduction #, but by
             // # of syms to pop off stack, and the sym to replace it.
             for x in fol_a {
-                action[i][symtab[x]] = quote!(Action::Reduce(#ord_pr, #sym));
+                let conflict = action[i][symtab[x]].replace(quote!(Action::Reduce(#ord_pr, #sym)));
+                assert!(conflict.is_none());
             }
         }
 
         // 2.c) If S' -> S · in I_i, action[i][symtab[$]] := accept
         if i_i.contains(&grammar.accept_item()) {
-            action[i][symtab[&Dollar]] = quote!(Action::Accept);
+            let conflict = action[i][symtab[&Dollar]].replace(quote!(Action::Accept));
+            assert!(conflict.is_none());
         }
 
-        // 3.
+        // 3. Compute goto-table.
         for (k, nt) in nts.iter().enumerate() {
             let go = grammar.goto(i_i, nt); // GOTO(I_i, nts[j])
 
@@ -267,24 +265,39 @@ fn compile_lr_table(src: String) -> proc_macro2::TokenStream {
             // Note: We don't care about the # of this LR-item, merely
             // that it exists.
             if let Some(j) = c.iter().position(|i_j| go == *i_j) {
-                goto[i][k] = quote!(Action::Goto(#j));
+                let conflict = goto[i][k].replace(quote!(Action::Goto(#j)));
+                assert!(conflict.is_none());
             }
         }
-
-        // 4. Convert None to Error (TODO after conflict checking)
-
     }
 
-    let start_state = c.iter().position(|i_i| {
-        i_i.contains(&grammar.start_item())
-    }).expect("could not find start item");
+    // 4. Convert None to Error (TODO after conflict checking)
+    for i in 0..k {
+        for j in 0..m + 1 {
+            if action[i][j].is_none() {
+                action[i][j].replace(quote!(Action::Error));
+            }
+        }
+    }
 
+    for i in 0..k {
+        for j in 0..n {
+            if goto[i][j].is_none() {
+                goto[i][j].replace(quote!(Action::Error));
+            }
+        }
+    }
 
-
+    // 5. Find the start state.
+    let start_state = c
+        .iter()
+        .position(|i_i| i_i.contains(&grammar.start_item()))
+        .expect("could not find start item");
 
     // Write `State`s for each state `i`.
     let states = (0..k).map(|i| {
-        let (a, g) = (&action[i], &goto[i]);
+        let a = action[i].iter().map(|opt| opt.as_ref());
+        let g = goto[i].iter().map(|opt| opt.as_ref());
         // String representation of a set of LR items
         let descr = lr::describe(&grammar.kernel(&c[i]));
         quote! {
@@ -298,9 +311,7 @@ fn compile_lr_table(src: String) -> proc_macro2::TokenStream {
         sym.to_string()
     });
 
-    let nt_descrs = (0..n).map(|i| {
-        nts[i].to_string()
-    });
+    let nt_descrs = (0..n).map(|i| nts[i].to_string());
 
     quote! {
         mod lr_table_scope {
