@@ -27,7 +27,7 @@ pub fn describe(its: &ItemSet) -> String {
     for (i, item) in its.into_iter().enumerate() {
         description.push_str(&item.to_string());
 
-        if i != n-1 {
+        if i != n - 1 {
             description.push_str(", ");
         }
     }
@@ -43,7 +43,7 @@ impl Item {
 
     pub fn has_terminal_after_dot(&self) -> bool {
         // If the dot is at the end, clearly there is no terminal after the dot.
-        if self.dot >= self.production.recipe.len() {
+        if self.is_reducing() {
             return false;
         }
         let after_dot = &self.production.recipe[self.dot];
@@ -52,6 +52,10 @@ impl Item {
 
     pub fn after_dot_unchecked(&self) -> &Symbol {
         &self.production.recipe[self.dot]
+    }
+
+    pub fn is_reducing(&self) -> bool {
+        self.dot >= self.production.recipe.len()
     }
 
     pub fn of(dot: usize, pr: &Production) -> Self {
@@ -81,9 +85,9 @@ impl Item {
 
 #[derive(Debug)]
 pub enum Action {
-    Goto(usize),
-    Reduce(usize),
-    Shift(usize),
+    Goto(usize),          // number is next state
+    Reduce(usize, usize), // # of syms to pop and ID of symbol to push
+    Shift(usize),         // number is next state
     Accept,
     Error,
 }
@@ -99,6 +103,8 @@ pub struct State<const M: usize, const N: usize> {
 
 #[allow(dead_code)] // This will be compiled by a proc macro.
 pub struct LrTable<const K: usize, const M: usize, const N: usize> {
+    pub t_sym_descr: [&'static str; M],
+    pub nt_sym_descr: [&'static str; N],
     pub states: [State<M, N>; K],
 }
 
@@ -125,8 +131,10 @@ impl fmt::Display for Action {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Action::Accept => write!(f, "ACC"),
-            Action::Error => write!(f, ""),
-            Action::Reduce(_) => write!(f, "R"),
+            // Inserting some dots in the table instead of leaving cells empty
+            // makes it easier to read, but keeps it relatively clean.
+            Action::Error => write!(f, "·"),
+            Action::Reduce(_, _) => write!(f, "R"),
             Action::Shift(j) => write!(f, "S{}", j),
             Action::Goto(a) => write!(f, "G{}", a),
         }
@@ -135,25 +143,50 @@ impl fmt::Display for Action {
 
 impl<const K: usize, const M: usize, const N: usize> fmt::Display for LrTable<K, M, N> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:<4} | ", "Stat")?;
-        write!(f, "{:<7}", "Action")?;
-        for _ in 0..M - 1 {
-            write!(f, "{:<7}", "")?;
+        // Print the first header row:
+        write!(f, "{:<5} | ", "State")?;
+        write!(f, "{:<10}", "Action")?;
+        for _ in 0..M - 2 {
+            write!(f, "{:<5}", "")?;
         }
-        write!(f, "| {:<7}", "Goto")?;
-        for _ in 0..N-1 {
-            write!(f, "{:<7}", "")?;
+        write!(f, "| {:<5}", "Goto")?;
+        for _ in 0..N - 1 {
+            write!(f, "{:<5}", "")?;
         }
         writeln!(f, "| Note")?;
 
+        // Print the second header row (with symbol identification).
+        write!(f, "{:<5} | ", "")?;
+        for i in 0..M {
+            write!(f, "{:<5}", self.t_sym_descr[i])?;
+        }
+        write!(f, "| ")?;
+        for i in 0..N {
+            write!(f, "{:<5}", self.nt_sym_descr[i])?;
+        }
+        writeln!(f, "| ")?;
+
+        // Print the table itself.
         for state in &self.states {
-            write!(f, "{:>4} | ", state.state)?;
+            write!(f, "{:>5} | ", state.state)?;
             for ac in &state.actions {
-                write!(f, "{:>7}", ac.to_string())?;
+                if let Action::Error = ac {
+                    // Color the entry red:
+                    let entry = Color::Red.paint(format!("{:<5}", ac.to_string()));
+                    write!(f, "{}", entry)?;
+                } else {
+                    write!(f, "{:<5}", ac.to_string())?;
+                }
             }
             write!(f, "| ")?;
             for g in &state.gotos {
-                write!(f, "{:>7}", g.to_string())?;
+                if let Action::Error = g {
+                    // Color the entry red:
+                    let entry = Color::Red.paint(format!("{:<5}", g.to_string()));
+                    write!(f, "{}", entry)?;
+                } else {
+                    write!(f, "{:<5}", g.to_string())?;
+                }
             }
             writeln!(f, "| {}", state.description)?;
         }

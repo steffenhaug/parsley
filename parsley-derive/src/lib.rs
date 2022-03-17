@@ -5,7 +5,7 @@ extern crate lazy_static;
 // TODO: Modularise the compiler.
 
 use parsley::bnf::bnf_parser::{semantic_analysis, BnfParser};
-use parsley::bnf::{self, pretty_print_set, Symbol};
+use parsley::bnf::Symbol;
 use parsley::lr;
 use parsley::parser::Parser;
 use proc_macro::TokenStream;
@@ -19,10 +19,6 @@ use syn::{Attribute, Data, DataEnum, DeriveInput, Fields, Ident, Variant};
 lazy_static! {
     // Database of terminals in the language.
     static ref TERMINALS: Mutex<HashMap<Symbol, usize>> = Mutex::new(HashMap::new());
-
-    // Note whether we have already implemented an alphabet type, because multiple is currently
-    // unsupported.
-    static ref HAVE_WE_PARSED_AN_ALPHABET: Mutex<bool> = Mutex::new(false);
 }
 
 fn find_attributes_named<'a, A>(attrs: A, name: &str) -> Vec<&'a Attribute>
@@ -67,16 +63,6 @@ fn extract_variant_info(v: &mut Variant) -> Option<(String, Ident, Fields)> {
 
 #[proc_macro_derive(Alphabet, attributes(terminal, grammar))]
 pub fn alphabet_derive(input: TokenStream) -> TokenStream {
-    // Check if we already defined an alphabet.
-    let mut alphabet_defined = HAVE_WE_PARSED_AN_ALPHABET.lock().unwrap();
-    if *alphabet_defined {
-        panic!("only supporting one alphabet type for now")
-    }
-
-    // Supporting multiple different alphabets could give conflicts
-    // in the terminal symbol table, so this would need some extra
-    // book-keeping. Definitely not too tricky, but not a priority.
-
     let ast = syn::parse_macro_input!(input as DeriveInput);
 
     let DeriveInput {
@@ -130,10 +116,6 @@ pub fn alphabet_derive(input: TokenStream) -> TokenStream {
     // Now we no longer need the symtab.
     drop(symtab);
 
-    // Indicate that an alphabet have been defined, since the symbol table
-    // can not currently be re-used.
-    *alphabet_defined = true;
-
     let lrtab_module = grammar_file.map_or(quote! {}, |file| {
         let src = std::fs::read_to_string(file).expect("could not read grammar file");
         compile_lr_table(src)
@@ -183,11 +165,13 @@ fn compile_lr_table(src: String) -> proc_macro2::TokenStream {
     // a LR parsing table, so we can have the table completely in the programs
     // data segment of the program so we get good performance.
 
-    let mut act: Vec<Vec<_>> = (0..k)
+    // todo: replace with options(tokenstream) and leave none, so we can
+    // check for confclicts. cant compare tokenstreams, so doesnt work atm
+    let mut action: Vec<Vec<_>> = (0..k)
         .map(|_| (0..m + 1).map(|_| quote!(Action::Error)).collect())
         .collect();
 
-    let mut go: Vec<Vec<_>> = (0..k)
+    let mut goto: Vec<Vec<_>> = (0..k)
         .map(|_| (0..n).map(|_| quote!(Action::Error)).collect())
         .collect();
 
@@ -199,18 +183,20 @@ fn compile_lr_table(src: String) -> proc_macro2::TokenStream {
     // to give meaningful numbers to our states, we will convert it into
     // a Vector!
     let c = c.into_iter().collect::<Vec<_>>();
-    // Note that this is the first time ordering of the LR items have been
-    // enforced, i.e. there is no correspondence between the grammar structure
-    // and the ordering of the items. If desired, this could be fixed by
-    // using a Set-structure with deterministic ordering. (HashSet doesn't in general)
+    // similarly, it will be useful to impose a defined ordering on the
+    // Non-terminals. Terminals already have an ordering imposed on them
+    // given by the derivation of `Alphabet`.
+    let nts = grammar.nonterminals.iter().clone().collect::<Vec<_>>();
 
-    // Compile the LR table! (finally)
+    // Compile the LR table! (Finally)
+    // Restating the definition in the book with some notes on how things are
+    // calculated imperatively:
     // 1. Cosntruct `clri` = collection of canonical lr items is already done.
     //
     // 2. State `i` is constructed from `clri[i]`.
     // The parsing actions for state `i` is determined as follows:
     //  a) A -> α · a β in clri[i] and GOTO(clri[i], a) = clri[j]
-    //      => action[i, smytab[a]] := shift j
+    //      => action[i][symtab[a]] := shift j
     //     i. e., if the symbol after the dot is a terminal, calculate the
     //     GOTO item-set. If this set is in clri at index j, put shift j
     //     into the action table. This suggests a linear search through
@@ -224,40 +210,87 @@ fn compile_lr_table(src: String) -> proc_macro2::TokenStream {
     //     its follow set, and for all symbols here, put in a reduce
     //     action. A != S'. a may be $.
     //
-    //  c) If S' -> S · in clri[i] => action[i, symtab[$]] := accept
+    //  c) If S' -> S · in clri[i] => action[i][symtab[$]] := accept
+    //
+    //  3. The goto-transitions for state i are constructed for all
+    //     non-terminals A using the rule
+    //       GOTO(I_i, nts[k]) = I_j => goto[i][k] := goto j
+    //     note the difference between GOTO the function and goto the
+    //     table of actions.
 
     for (i, i_i) in c.iter().enumerate() {
-        // a) Find all LR-items with a terminal after the dot.
+        // 2.a) Find all LR-items with a terminal after the dot.
         for lri in i_i.iter().filter(|item| item.has_terminal_after_dot()) {
-            // Get the symbol after the dot, and calculate GOTO(i_i, a)
-            let a = lri.after_dot_unchecked();
-            let goto = grammar.goto(i_i, a);
+            let a = lri.after_dot_unchecked(); // a
+            let goto = grammar.goto(i_i, a); // GOTO(I_i, a)
 
             // Find the next state i_j, where GOTO(i_i, a) == i_j.
             if let Some(j) = c.iter().position(|i_j| goto == *i_j) {
-                print!("GOT TERMINAL AFTER DOT: {} GOTO: ", &lri);
-                pretty_print_set(&goto);
-                println!(" {} -> {}", i, j);
-                act[i][symtab[a]] = quote!(Action::Shift(#j));
+                action[i][symtab[a]] = quote!(Action::Shift(#j));
+            }
+        }
+
+        // 2.b) Find all LR-items that can reduce.
+        for lri in i_i
+            .iter()
+            .filter(|it| it.is_reducing())
+            .filter(|it| it.production != grammar.augmented_start())
+        {
+            // lri = A -> β ·
+            let a = &lri.production.symbol; // A
+            let fol_a = &fol[a]; // FOLLOW(A)
+            let ord_pr = lri.production.recipe.len(); // |β| (# syms to pop after reducing)
+            let sym = nts.iter().position(|name| *name == a);
+
+            // For all x in FOLLOW(A), act[i, x] = Reduce A -> β.
+            // Note that the reduction is encoded not by reduction #, but by
+            // # of syms to pop off stack, and the sym to replace it.
+            for x in fol_a {
+                action[i][symtab[x]] = quote!(Action::Reduce(#ord_pr, #sym));
+            }
+        }
+
+        // 3.
+        for (k, nt) in nts.iter().enumerate() {
+            let go = grammar.goto(i_i, nt); // GOTO(I_i, nts[j])
+
+            // Find the state I_j, where GOTO(I_i, nts[j]) == I_j.
+            // Note: We don't care about the # of this LR-item, merely
+            // that it exists.
+            if let Some(j) = c.iter().position(|i_j| go == *i_j) {
+                goto[i][k] = quote!(Action::Goto(#j));
             }
         }
     }
 
     // Write `State`s for each state `i`.
     let states = (0..k).map(|i| {
-        let (a, g) = (&act[i], &go[i]);
+        let (a, g) = (&action[i], &goto[i]);
         // String representation of a set of LR items
-        let descr = lr::describe(&grammar.kernel(&c[i]));
+        let descr = lr::describe(&c[i]);
         quote! {
             State { state: #i, actions: [ #(#a),* ], gotos: [ #(#g),*], description: #descr }
         }
     });
 
+    // Compute the reverse lookup of the symbol table to describe terminals.
+    let t_descrs = (0..m + 1).map(|i| {
+        let sym = symtab.iter().find(|(_, v)| **v == i).unwrap().0;
+        sym.to_string()
+    });
+
+    let nt_descrs = (0..n).map(|i| {
+        nts[i].to_string()
+    });
+
     quote! {
         mod lr_table_scope {
             use parsley::lr::*;
+            use parsley::bnf::{self, Symbol::*};
             // Put the states into a Kx(M+1+N) LR table.
             pub const LR_TABLE: LrTable<#k, {#m+1}, #n> = LrTable {
+                t_sym_descr: [ #(#t_descrs),* ],
+                nt_sym_descr: [ #(#nt_descrs),* ],
                 states: [ #(#states),* ]
             };
         }

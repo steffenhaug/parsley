@@ -19,7 +19,7 @@ type Map = HashMap<Symbol, Set>;
 pub struct Grammar {
     pub nonterminals: Set,
     pub terminals: Set,
-    start_sym: Option<Symbol>,
+    pub start_sym: Option<Symbol>,
     productions: Vec<Production>,
 }
 
