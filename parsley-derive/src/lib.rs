@@ -1,4 +1,3 @@
-//!
 #[macro_use]
 extern crate lazy_static;
 extern crate parsley_util;

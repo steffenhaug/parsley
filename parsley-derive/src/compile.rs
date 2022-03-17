@@ -216,7 +216,6 @@ pub fn compile_lr_table(src: String) -> TokenStream {
         // Generate the code.
         quote! {
             State {
-                state: #i,
                 actions: [ #(#a),* ],
                 gotos: [ #(#g),*],
                 description: #descr
@@ -224,7 +223,7 @@ pub fn compile_lr_table(src: String) -> TokenStream {
         }
     });
 
-    // Compute the reverse lookup of the symbol tables.
+    // Compute reverse lookups of the symbol tables.
     // These are used to place &'static str representations of the symbols
     // in the parsing table, so we can create nonterminals to push to the
     // stack, and print nice error messages should we encounter errors.

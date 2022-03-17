@@ -94,7 +94,6 @@ pub enum Action {
 
 #[derive(Debug)]
 pub struct State<const M: usize, const N: usize> {
-    pub state: usize,
     pub actions: [Action; M],
     pub gotos: [Action; N],
     pub description: &'static str,
@@ -103,7 +102,7 @@ pub struct State<const M: usize, const N: usize> {
 pub struct LrTable<const K: usize, const M: usize, const N: usize> {
     // Symbol tables.
     pub terminals: [&'static str; M],
-    pub nonterinals: [&'static str; N],
+    pub nonterminals: [&'static str; N],
     // LR parsing table.
     pub states: [State<M, N>; K],
     pub start_state: usize,
@@ -159,21 +158,21 @@ impl<const K: usize, const M: usize, const N: usize> fmt::Display for LrTable<K,
         // Print the second header row (with symbol identification).
         write!(f, "{:<5} | ", "")?;
         for i in 0..M {
-            write!(f, "{:<5}", self.t_sym_descr[i])?;
+            write!(f, "{:<5}", self.terminals[i])?;
         }
         write!(f, "| ")?;
         for i in 0..N {
-            write!(f, "{:<5}", self.nt_sym_descr[i])?;
+            write!(f, "{:<5}", self.nonterminals[i])?;
         }
         writeln!(f, "| ")?;
 
         // Print the table itself.
-        for state in &self.states {
+        for (i, state) in self.states.iter().enumerate() {
             // Mark the start state.
-            if state.state == self.start_state {
-                write!(f, "{:>5} | ", format!("*{}", state.state))?;
+            if i == self.start_state {
+                write!(f, "{:>5} | ", format!("*{}", i))?;
             } else {
-                write!(f, "{:>5} | ", state.state)?;
+                write!(f, "{:>5} | ", i)?;
             }
 
             for ac in &state.actions {
@@ -195,7 +194,11 @@ impl<const K: usize, const M: usize, const N: usize> fmt::Display for LrTable<K,
                     write!(f, "{:<5}", g.to_string())?;
                 }
             }
-            writeln!(f, "| {}", state.description)?;
+            write!(f, "| {}", state.description)?;
+
+            if i != self.states.len() - 1 {
+                writeln!(f)?;
+            }
         }
 
         Ok(())
