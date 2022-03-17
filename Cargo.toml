@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "parsley",
+    "parsley-derive",
+    "parsley-util",
+    "parsley-example"
+]
