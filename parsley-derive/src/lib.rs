@@ -5,7 +5,7 @@ extern crate lazy_static;
 // TODO: Modularise the compiler.
 
 use parsley::bnf::bnf_parser::{semantic_analysis, BnfParser};
-use parsley::bnf::Symbol;
+use parsley::bnf::Symbol::{self, *};
 use parsley::lr;
 use parsley::parser::Parser;
 use proc_macro::TokenStream;
@@ -98,13 +98,13 @@ pub fn alphabet_derive(input: TokenStream) -> TokenStream {
 
     for (seq, (literal, _, _)) in variants.iter().enumerate() {
         // Unquote the string-literals value and add it to the symbol database.
-        symtab.insert(Symbol::Terminal(literal.to_string().into()), seq);
+        symtab.insert(Terminal(literal.to_string().into()), seq);
     }
 
     let match_arms: proc_macro2::TokenStream = variants
         .iter()
         .map(|(lit, id, fs)| {
-            let n = symtab[&Symbol::Terminal(lit.to_owned().into())];
+            let n = symtab[&Terminal(lit.to_owned().into())];
             match fs {
                 Fields::Unit => quote! { #ident :: #id     => #n, },
                 Fields::Unnamed(_) => quote! { #ident :: #id (_) => #n, },
@@ -158,7 +158,7 @@ fn compile_lr_table(src: String) -> proc_macro2::TokenStream {
     // We have a column for $, even though it is not a real terminal.
     // The terminals' IDs range from [0, m-1], so the ID m is free, and
     // corresponds to the right-most column in the action table.
-    symtab.insert(Symbol::Dollar, m);
+    symtab.insert(Dollar, m);
 
     // Note that these tables are tables of _quoted Rust code_! After computing
     // the table (of code) the table will be compiled into code compiling into
@@ -217,6 +217,10 @@ fn compile_lr_table(src: String) -> proc_macro2::TokenStream {
     //       GOTO(I_i, nts[k]) = I_j => goto[i][k] := goto j
     //     note the difference between GOTO the function and goto the
     //     table of actions.
+    //
+    //  4. All remaining entries indicate error.
+    //
+    //  5. The automaton starts in the state containing S' -> · S.
 
     for (i, i_i) in c.iter().enumerate() {
         // 2.a) Find all LR-items with a terminal after the dot.
@@ -250,6 +254,11 @@ fn compile_lr_table(src: String) -> proc_macro2::TokenStream {
             }
         }
 
+        // 2.c) If S' -> S · in I_i, action[i][symtab[$]] := accept
+        if i_i.contains(&grammar.accept_item()) {
+            action[i][symtab[&Dollar]] = quote!(Action::Accept);
+        }
+
         // 3.
         for (k, nt) in nts.iter().enumerate() {
             let go = grammar.goto(i_i, nt); // GOTO(I_i, nts[j])
@@ -261,13 +270,18 @@ fn compile_lr_table(src: String) -> proc_macro2::TokenStream {
                 goto[i][k] = quote!(Action::Goto(#j));
             }
         }
+
+        // 4. Convert None to Error (TODO after conflict checking)
     }
+
+    // 5. Find start state.
+
 
     // Write `State`s for each state `i`.
     let states = (0..k).map(|i| {
         let (a, g) = (&action[i], &goto[i]);
         // String representation of a set of LR items
-        let descr = lr::describe(&c[i]);
+        let descr = lr::describe(&grammar.kernel(&c[i]));
         quote! {
             State { state: #i, actions: [ #(#a),* ], gotos: [ #(#g),*], description: #descr }
         }

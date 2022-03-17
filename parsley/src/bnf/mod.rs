@@ -312,6 +312,15 @@ impl Grammar {
         }
     }
 
+    /// The augmented start production with a dot at the end.
+    /// When this item would normally indicate the automaton to reduce,
+    /// the input should be accepted.
+    pub fn accept_item(&self) -> Item {
+        let production = self.augmented_start();
+        let dot = production.recipe.len();
+        Item { production, dot }
+    }
+
     pub fn kernel(&self, i: &ItemSet) -> ItemSet {
         let s = self.augmented_start().lr_item(); // S' -> ·S
         let k = i

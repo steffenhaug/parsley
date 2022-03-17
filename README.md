@@ -54,14 +54,16 @@ runtime, as it implements `fmt:Display`.
 The output will look something like
 ```
 State | Action              | Goto           | Note
-      | +    -    n    $    | T    S    N    | 
-    0 | ·    ·    S4   ·    | G1   G2   G3   | {S -> · T, S' -> · S, T -> · N, T -> · T - N, T -> · T + N, N -> · n}
-    1 | S6   S5   ·    R    | ·    ·    ·    | {T -> T · + N, T -> T · - N, S -> T ·}
-    2 | ·    ·    ·    ·    | ·    ·    ·    | {S' -> S ·}
-    3 | R    R    ·    R    | ·    ·    ·    | {T -> N ·}
+      | +    -    n    $    | N    T    S    | 
+    0 | ·    ·    S4   ·    | G1   G2   G3   | {S' -> · S}
+    1 | R    R    ·    R    | ·    ·    ·    | {T -> N ·}
+    2 | S6   S5   ·    R    | ·    ·    ·    | {T -> T · + N, T -> T · - N, S -> T ·}
+    3 | ·    ·    ·    ACC  | ·    ·    ·    | {S' -> S ·}
     4 | R    R    ·    R    | ·    ·    ·    | {N -> n ·}
-    5 | ·    ·    S4   ·    | ·    ·    G7   | {T -> T - · N, N -> · n}
-    6 | ·    ·    S4   ·    | ·    ·    G8   | {T -> T + · N, N -> · n}
+    5 | ·    ·    S4   ·    | G7   ·    ·    | {T -> T - · N}
+    6 | ·    ·    S4   ·    | G8   ·    ·    | {T -> T + · N}
     7 | R    R    ·    R    | ·    ·    ·    | {T -> T - N ·}
     8 | R    R    ·    R    | ·    ·    ·    | {T -> T + N ·}
 ```
+Note that because of the use of un-ordered set types in the compilation, the
+table can be a bit unpredictable.
