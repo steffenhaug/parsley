@@ -4,12 +4,14 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+# Proc-macro related
 quote = "1.0.15"
 proc-macro2 = "1.0.33"
 syn = { version = "1.0.86", features = ["extra-traits"] }
-parsley = { path = "../parsley" }
 lazy_static = "1.4.0"
 
+# Compilation-related.
+parsley-util = { path = "../parsley-util" }
 
 [lib]
 name = "parsley_derive"

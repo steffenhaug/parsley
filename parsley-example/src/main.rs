@@ -1,5 +1,4 @@
-use parsley::alphabet::Alphabet;
-use parsley_derive::Alphabet;
+use parsley::Alphabet;
 
 #[allow(dead_code)]
 #[derive(Alphabet)]
@@ -11,5 +10,5 @@ enum Sym {
 }
 
 fn main() {
-    println!("{}", lr_table_scope::LR_TABLE);
+    println!("{}", parsley_gen::LR_TABLE);
 }

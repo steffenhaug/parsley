@@ -1,25 +1,15 @@
-extern crate proc_macro;
+//!
 #[macro_use]
 extern crate lazy_static;
+extern crate parsley_util;
+extern crate proc_macro;
+mod compile;
 
-// TODO: Modularise the compiler.
-
-use parsley::bnf::bnf_parser::{semantic_analysis, BnfParser};
-use parsley::bnf::Symbol::{self, *};
-use parsley::lr;
-use parsley::parser::Parser;
+use parsley_util::bnf::Symbol::*;
 use proc_macro::TokenStream;
 use proc_macro2::TokenTree;
 use quote::quote;
-
-use std::collections::HashMap;
-use std::sync::Mutex;
 use syn::{Attribute, Data, DataEnum, DeriveInput, Fields, Ident, Variant};
-
-lazy_static! {
-    // Database of terminals in the language.
-    static ref TERMINALS: Mutex<HashMap<Symbol, usize>> = Mutex::new(HashMap::new());
-}
 
 fn find_attributes_named<'a, A>(attrs: A, name: &str) -> Vec<&'a Attribute>
 where
@@ -79,9 +69,6 @@ pub fn alphabet_derive(input: TokenStream) -> TokenStream {
             .value()
     });
 
-    // This is now something sensible:
-    //     dbg!(&grammar_file);
-
     // Extract the relevant info about the enum variants from the tree.
     // (terminals in the grammar, identifier and fields)
     let variants: Vec<(String, Ident, Fields)> = if let Data::Enum(DataEnum { variants, .. }) = data
@@ -94,7 +81,9 @@ pub fn alphabet_derive(input: TokenStream) -> TokenStream {
         panic!("Only enums can derive Alphabet!");
     };
 
-    let mut symtab = TERMINALS.lock().unwrap();
+    // Fill out the symtab.
+
+    let mut symtab = compile::TERMINALS.lock().unwrap();
 
     for (seq, (literal, _, _)) in variants.iter().enumerate() {
         // Unquote the string-literals value and add it to the symbol database.
@@ -118,7 +107,7 @@ pub fn alphabet_derive(input: TokenStream) -> TokenStream {
 
     let lrtab_module = grammar_file.map_or(quote! {}, |file| {
         let src = std::fs::read_to_string(file).expect("could not read grammar file");
-        compile_lr_table(src)
+        crate::compile::compile_lr_table(src)
     });
 
     let expanded = quote! {
@@ -135,195 +124,4 @@ pub fn alphabet_derive(input: TokenStream) -> TokenStream {
     };
 
     expanded.into()
-}
-
-fn compile_lr_table(src: String) -> proc_macro2::TokenStream {
-    let ast = BnfParser::from_src(&src)
-        .parse()
-        .expect("failed to parse grammar");
-
-    let grammar = semantic_analysis(ast).expect("semantic error in grammar");
-    let fst = grammar.first_sets();
-    let fol = grammar.follow_sets(&fst);
-    let c = grammar.canonical_lr0_items();
-
-    // Now that we are ready to compile the table, we need the symtab.
-    let mut symtab = TERMINALS.lock().unwrap();
-
-    let m = grammar.terminals.len();
-    let n = grammar.nonterminals.len();
-    let k = c.len();
-
-    // We have K states, each with M+1 actions and N gotos.
-    // We have a column for $, even though it is not a real terminal.
-    // The terminals' IDs range from [0, m-1], so the ID m is free, and
-    // corresponds to the right-most column in the action table.
-    symtab.insert(Dollar, m);
-
-    // Note that these tables are tables of _quoted Rust code_! After computing
-    // the table (of code) the table will be compiled into code compiling into
-    // a LR parsing table, so we can have the table completely in the programs
-    // data segment of the program so we get good performance.
-
-    // todo: replace with options(tokenstream) and leave none, so we can
-    // check for confclicts. cant compare tokenstreams, so doesnt work atm
-    let mut action: Vec<Vec<_>> = (0..k).map(|_| (0..m + 1).map(|_| None).collect()).collect();
-
-    let mut goto: Vec<Vec<_>> = (0..k).map(|_| (0..n).map(|_| None).collect()).collect();
-
-    // So for example, now something like this is valid:
-    //     act[0][symtab["n"]] = quote!(Action::Shift(5));
-
-    // Now, one last thing: Until now we operated with our LR item set as
-    // a _actual_ set (a HashSet) in which the order is not defined, so
-    // to give meaningful numbers to our states, we will convert it into
-    // a Vector!
-    let c = c.into_iter().collect::<Vec<_>>();
-    // similarly, it will be useful to impose a defined ordering on the
-    // Non-terminals. Terminals already have an ordering imposed on them
-    // given by the derivation of `Alphabet`.
-    let nts = grammar.nonterminals.iter().clone().collect::<Vec<_>>();
-
-    // Compile the LR table! (Finally)
-    // Restating the definition in the book with some notes on how things are
-    // calculated imperatively:
-    // 1. Cosntruct `clri` = collection of canonical lr items is already done.
-    //
-    // 2. State `i` is constructed from `clri[i]`.
-    // The parsing actions for state `i` is determined as follows:
-    //  a) A -> α · a β in clri[i] and GOTO(clri[i], a) = clri[j]
-    //      => action[i][symtab[a]] := shift j
-    //     i. e., if the symbol after the dot is a terminal, calculate the
-    //     GOTO item-set. If this set is in clri at index j, put shift j
-    //     into the action table. This suggests a linear search through
-    //     clri for every terminal after a dot in clri[i]. This can probably
-    //     be done more efficiently, but in the interest of following the
-    //     books notation, we will do a linear search.
-    //
-    //  b) A -> α · in clri[i]
-    //      => forall a in FOLLOW(A), action[i, symtab[a]] = reduce
-    //     i. e., if a production is reducing in clri[i], calculate
-    //     its follow set, and for all symbols here, put in a reduce
-    //     action. A != S'. a may be $.
-    //
-    //  c) If S' -> S · in clri[i] => action[i][symtab[$]] := accept
-    //
-    //  3. The goto-transitions for state i are constructed for all
-    //     non-terminals A using the rule
-    //       GOTO(I_i, nts[k]) = I_j => goto[i][k] := goto j
-    //     note the difference between GOTO the function and goto the
-    //     table of actions.
-    //
-    //  4. All remaining entries indicate error.
-    //
-    //  5. The automaton starts in the state containing S' -> · S.
-
-    for (i, i_i) in c.iter().enumerate() {
-        // 2.a) Find all LR-items with a terminal after the dot.
-        for lri in i_i.iter().filter(|item| item.has_terminal_after_dot()) {
-            let a = lri.after_dot_unchecked(); // a
-            let goto = grammar.goto(i_i, a); // GOTO(I_i, a)
-
-            // Find the next state i_j, where GOTO(i_i, a) == i_j.
-            if let Some(j) = c.iter().position(|i_j| goto == *i_j) {
-                action[i][symtab[a]].replace(quote!(Action::Shift(#j)));
-            }
-        }
-
-        // 2.b) Find all LR-items that can reduce.
-        for lri in i_i
-            .iter()
-            .filter(|it| it.is_reducing())
-            .filter(|it| it.production != grammar.augmented_start())
-        {
-            // lri = A -> β ·
-            let a = &lri.production.symbol; // A
-            let fol_a = &fol[a]; // FOLLOW(A)
-            let ord_pr = lri.production.recipe.len(); // |β| (# syms to pop after reducing)
-            let sym = nts.iter().position(|name| *name == a);
-
-            // For all x in FOLLOW(A), act[i, x] = Reduce A -> β.
-            // Note that the reduction is encoded not by jkreduction #, but by
-            // # of syms to pop off stack, and the sym to replace it.
-            for x in fol_a {
-                let conflict = action[i][symtab[x]].replace(quote!(Action::Reduce(#ord_pr, #sym)));
-                assert!(conflict.is_none());
-            }
-        }
-
-        // 2.c) If S' -> S · in I_i, action[i][symtab[$]] := accept
-        if i_i.contains(&grammar.accept_item()) {
-            let conflict = action[i][symtab[&Dollar]].replace(quote!(Action::Accept));
-            assert!(conflict.is_none());
-        }
-
-        // 3. Compute goto-table.
-        for (k, nt) in nts.iter().enumerate() {
-            let go = grammar.goto(i_i, nt); // GOTO(I_i, nts[j])
-
-            // Find the state I_j, where GOTO(I_i, nts[j]) == I_j.
-            // Note: We don't care about the # of this LR-item, merely
-            // that it exists.
-            if let Some(j) = c.iter().position(|i_j| go == *i_j) {
-                let conflict = goto[i][k].replace(quote!(Action::Goto(#j)));
-                assert!(conflict.is_none());
-            }
-        }
-    }
-
-    // 4. Convert None to Error (TODO after conflict checking)
-    for i in 0..k {
-        for j in 0..m + 1 {
-            if action[i][j].is_none() {
-                action[i][j].replace(quote!(Action::Error));
-            }
-        }
-    }
-
-    for i in 0..k {
-        for j in 0..n {
-            if goto[i][j].is_none() {
-                goto[i][j].replace(quote!(Action::Error));
-            }
-        }
-    }
-
-    // 5. Find the start state.
-    let start_state = c
-        .iter()
-        .position(|i_i| i_i.contains(&grammar.start_item()))
-        .expect("could not find start item");
-
-    // Write `State`s for each state `i`.
-    let states = (0..k).map(|i| {
-        let a = action[i].iter().map(|opt| opt.as_ref());
-        let g = goto[i].iter().map(|opt| opt.as_ref());
-        // String representation of a set of LR items
-        let descr = lr::describe(&grammar.kernel(&c[i]));
-        quote! {
-            State { state: #i, actions: [ #(#a),* ], gotos: [ #(#g),*], description: #descr }
-        }
-    });
-
-    // Compute the reverse lookup of the symbol table to describe terminals.
-    let t_descrs = (0..m + 1).map(|i| {
-        let sym = symtab.iter().find(|(_, v)| **v == i).unwrap().0;
-        sym.to_string()
-    });
-
-    let nt_descrs = (0..n).map(|i| nts[i].to_string());
-
-    quote! {
-        mod lr_table_scope {
-            use parsley::lr::*;
-            use parsley::bnf::{self, Symbol::*};
-            // Put the states into a Kx(M+1+N) LR table.
-            pub const LR_TABLE: LrTable<#k, {#m+1}, #n> = LrTable {
-                t_sym_descr: [ #(#t_descrs),* ],
-                nt_sym_descr: [ #(#nt_descrs),* ],
-                states: [ #(#states),* ],
-                start_state: #start_state,
-            };
-        }
-    }
 }

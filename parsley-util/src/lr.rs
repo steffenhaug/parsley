@@ -86,13 +86,12 @@ impl Item {
 #[derive(Debug)]
 pub enum Action {
     Goto(usize),          // number is next state
-    Reduce(usize, usize), // # of syms to pop and ID of symbol to push
+    Reduce(usize, usize), // # of syms to pop and index of symbol to push
     Shift(usize),         // number is next state
     Accept,
     Error,
 }
 
-#[allow(dead_code)] // This will be compiled by a proc macro.
 #[derive(Debug)]
 pub struct State<const M: usize, const N: usize> {
     pub state: usize,
@@ -101,10 +100,11 @@ pub struct State<const M: usize, const N: usize> {
     pub description: &'static str,
 }
 
-#[allow(dead_code)] // This will be compiled by a proc macro.
 pub struct LrTable<const K: usize, const M: usize, const N: usize> {
-    pub t_sym_descr: [&'static str; M],
-    pub nt_sym_descr: [&'static str; N],
+    // Symbol tables.
+    pub terminals: [&'static str; M],
+    pub nonterinals: [&'static str; N],
+    // LR parsing table.
     pub states: [State<M, N>; K],
     pub start_state: usize,
 }
