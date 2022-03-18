@@ -8,6 +8,7 @@ use parsley_util::bnf::Symbol::*;
 use proc_macro::TokenStream;
 use proc_macro2::TokenTree;
 use quote::quote;
+use std::path::PathBuf;
 use syn::{Attribute, Data, DataEnum, DeriveInput, Fields, Ident, Variant};
 
 fn find_attributes_named<'a, A>(attrs: A, name: &str) -> Vec<&'a Attribute>
@@ -105,7 +106,18 @@ pub fn alphabet_derive(input: TokenStream) -> TokenStream {
     drop(symtab);
 
     let lrtab_module = grammar_file.map_or(quote! {}, |file| {
-        let src = std::fs::read_to_string(file).expect("could not read grammar file");
+        // Look for grammar file relative to the crate root.
+        // This is necessary because the rust language server and cargo
+        // is not consistent in whether the compilation is crate-relative
+        // or workspace-relative.
+        let manifest = std::env::var("CARGO_MANIFEST_DIR")
+            .expect("missing $CARGO_MANIFEST_DIR, something is wrong with your cargo project");
+        let src_dir: PathBuf = [&manifest, "src", &file].iter().collect();
+
+        // Open the file.
+        let src = std::fs::read_to_string(src_dir).expect("grammar file not found");
+
+        // Compile the grammar.
         crate::compile::compile_lr_table(src)
     });
 

@@ -2,7 +2,7 @@ use parsley::Alphabet;
 
 #[allow(dead_code)]
 #[derive(Alphabet)]
-#[grammar("parsley-example/src/grammar.parsley")]
+#[grammar("grammar.parsley")]
 enum Sym {
     #[terminal("+")] Plus,
     #[terminal("-")] Minus,

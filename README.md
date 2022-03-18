@@ -17,7 +17,7 @@ we can auto-derive this correspondence.
 So for example, you can specify your alphabets symbols with an `enum` like so:
 ```Rust
 #[derive(Alphabet)]
-#[grammar("src/grammar.parsley")]
+#[grammar("grammar.parsley")]
 enum Sym {
     #[terminal("+")] Plus,
     #[terminal("-")] Minus,
