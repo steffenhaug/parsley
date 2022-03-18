@@ -49,8 +49,8 @@ They can not be completely arbitrary, but a lot of symbols are allowed.
 
 The LR table is compiled to (very ugly) Rust-code that includes the table
 in its own module. Inspecting the compiled code can be done with `cargo expand`,
-but is gonna be pretty annoying to read. The table can instaed be printed at
-runtime, as it implements `fmt:Display`.
+but is gonna be pretty annoying to read. The table can instead be printed at
+runtime, as it implements `fmt::Display`.
 The output will look something like
 ```
 Grammar rules:
