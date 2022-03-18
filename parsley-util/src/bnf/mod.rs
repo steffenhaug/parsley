@@ -20,7 +20,7 @@ pub struct Grammar {
     pub nonterminals: Set,
     pub terminals: Set,
     pub start_sym: Option<Symbol>,
-    productions: Vec<Production>,
+    pub productions: Vec<Production>,
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]

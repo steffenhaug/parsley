@@ -37,6 +37,7 @@ pub fn compile_lr_table(src: String) -> TokenStream {
     let m = grammar.terminals.len();
     let n = grammar.nonterminals.len();
     let k = canon_item_sets.len();
+    let p = grammar.productions.len();
 
     // Acquire the symbol table, and insert dollar as the Mth symbol.
     // Note: A grammar with M terminal symbol thus requires table-
@@ -130,24 +131,16 @@ pub fn compile_lr_table(src: String) -> TokenStream {
             // We have item = [A -> β ·] for some β.
             let a_nt = &item.production.symbol; // A (a non-terminal!)
             let fol_a = &fol[a_nt]; // FOLLOW(A)
-
-            // We encode the reduce action slightly differently from the
-            // book, because storing the recipe, which is a Vec of symbols,
-            // i. e. heap-allocated, in a `const` table is unnecessary.
-            // We only need to know how many symbols to pull from the stack,
-            // and which symbol to replace it with.
-
-            // |β| := the order of the recipe is the # of symbols we need
-            // to remove from the stack when performing the reduction.
-            let ord = item.production.recipe.len();
-
-            // The index of the non-terminal A allows us to reconstruct it
-            // when parsing to put on the stack to replace β.
-            let sym = nonterminals.iter().position(|nt| *nt == a_nt);
+            let red = grammar
+                .productions
+                .iter()
+                // Find the position of the production. It exists by definition.
+                .position(|pr| *pr == item.production)
+                .unwrap();
 
             // For all a in FOLLOW(A), action[i][symtab[a]] = reduce A -> β.
             for a in fol_a {
-                let conflict = action[i][symtab[a]].replace(quote!(Action::Reduce(#ord, #sym)));
+                let conflict = action[i][symtab[a]].replace(quote!(Action::Reduce(#red)));
                 assert!(conflict.is_none());
             }
         }
@@ -233,6 +226,20 @@ pub fn compile_lr_table(src: String) -> TokenStream {
         sym.to_string()
     });
 
+    let reductions = (0..p).map(|i| {
+        let ord = grammar.productions[i].recipe.len();
+        let sym = grammar.productions[i].symbol.to_string();
+        let descr = grammar.productions[i].to_string();
+
+        quote! {
+            Reduction {
+                ord: #ord,
+                sym: #sym,
+                description: #descr,
+            }
+        }
+    });
+
     // Generate the code.
     // This emits a whole module to attempt to minimze the pollution of
     // the users namespace. There is still a theoretical chance of conflict,
@@ -243,9 +250,10 @@ pub fn compile_lr_table(src: String) -> TokenStream {
             use ::parsley::internals::lr::*;
             use ::parsley::internals::bnf::{self, Symbol::*};
             // Put the states into a Kx(M+1+N) LR table.
-            pub const LR_TABLE: LrTable<#k, {#m+1}, #n> = LrTable {
+            pub const LR_TABLE: LrTable<#k, {#m+1}, #n, #p> = LrTable {
                 terminals: [ #(#terminal_names),* ],
                 nonterminals: [ #(#nonterminal_names),* ],
+                reductions: [ #(#reductions),* ],
                 states: [ #(#states),* ],
                 start_state: #start_state,
             };
