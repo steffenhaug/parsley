@@ -121,3 +121,16 @@ LR-Parser stack trace:
 Beware, however, that these can get _extremely_ long if you parse
 longer strings. But it can ne useful to learn more about how an LR
 parser is operating when studying simple examples.
+
+## to-do
+### quality
+* error hierachy in the BNF compilation process, so we can give good compilation errors when the
+  proc macro has to panic
+* error recovery for the LR parser. some ideas: transfer ownership to an error-recovery struct that
+  can synchronize and resume parsing. this would be a really good use case for a monadic system
+
+### organization
+* remove the proc macros dependency on the `lr` module so we can move that to the `parsley` crate instead of `parsley-util`.
+
+### docs
+* yes
