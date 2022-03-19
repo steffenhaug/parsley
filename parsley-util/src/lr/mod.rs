@@ -63,13 +63,12 @@ impl<A: Alphabet, const K: usize, const M: usize, const N: usize, const P: usize
 {
     /// The table is compiled into a `const`, so we can easily get an &'static reference
     /// to self, which massively simplifies lifetime management.
-    pub fn parser(&'static self, toks: Vec<A>) -> LrParser<A, K, M, N, P> {
+    pub fn parser(&self, toks: Vec<A>) -> LrParser<A, K, M, N, P> {
         LrParser {
             table: self,
             states: Vec::new(),
             symbols: Vec::new(),
             input: toks,
-            position: 0,
             trace: false,
         }
     }
