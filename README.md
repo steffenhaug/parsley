@@ -73,3 +73,51 @@ State | Action              | Goto           | Kernel
 ```
 Note that because of the use of un-ordered set types in the compilation, the
 table can be a bit unpredictable.
+
+The parsers derived from this table can be configured to print the stack trace
+of the parsing process. It will look something like this:
+```
+LR-Parser stack trace:
+0    States:  0
+     Symbols:
+     Look: n => Action: S4 n
+1    States:  0   4
+     Symbols: n  
+     Look: + => Action: R4 N -> n
+2    States:  0   2
+     Symbols: N  
+     Look: + => Action: R3 T -> N
+3    States:  0   1
+     Symbols: T  
+     Look: + => Action: S5 +
+4    States:  0   1   5
+     Symbols: T   +  
+     Look: n => Action: S4 n
+5    States:  0   1   5   4
+     Symbols: T   +   n  
+     Look: - => Action: R4 N -> n
+6    States:  0   1   5   7
+     Symbols: T   +   N  
+     Look: - => Action: R1 T -> T + N
+7    States:  0   1
+     Symbols: T  
+     Look: - => Action: S6 -
+8    States:  0   1   6
+     Symbols: T   -  
+     Look: n => Action: S4 n
+9    States:  0   1   6   4
+     Symbols: T   -   n  
+     Look: $ => Action: R4 N -> n
+10   States:  0   1   6   8
+     Symbols: T   -   N  
+     Look: $ => Action: R2 T -> T - N
+11   States:  0   1
+     Symbols: T  
+     Look: $ => Action: R0 S -> T
+12   States:  0   3
+     Symbols: S  
+     Look: $ => Action: Accept
+```
+Beware, however, that these can get _extremely_ long if you parse
+longer strings. But it can ne useful to learn more about how an LR
+parser is operating when studying simple examples.

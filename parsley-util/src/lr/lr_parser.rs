@@ -69,6 +69,10 @@ impl<'a, A: Alphabet, const K: usize, const M: usize, const N: usize, const P: u
     }
 
     /// Reduces A -> β given n = |β| and i = i(A).
+    /// This involves popping n symbols off the stack, turning them
+    /// into a new internal AST-node, and pusing that to the symbol
+    /// stack, and also popping the states corresponding to the node
+    /// off the state stack to expose the state that expected an A.
     fn reduce(&mut self, n: usize, i: usize) {
         // Pop n = |β| symbols off the stack.
         let rhs = self.pop(n);
@@ -77,6 +81,10 @@ impl<'a, A: Alphabet, const K: usize, const M: usize, const N: usize, const P: u
         self.symbols.push(Tree::Internal(sym, rhs));
     }
 
+    /// Shifts a symbol from lookahead onto the stack.
+    /// This involves both shifting a state to the state stack,
+    /// and constructing a leaf-node for the AST and shifting
+    /// that to the symbol stack.
     fn shift(&mut self, state: usize, sym: usize, token: A) {
         self.states.push(state);
         let sym = Tree::Leaf(self.table.terminals[sym], token);
