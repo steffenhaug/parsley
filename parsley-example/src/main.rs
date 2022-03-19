@@ -26,6 +26,5 @@ fn main() {
     let toks: Vec<Tok> = Tok::lexer(input).into_iter().collect();
     let parser = parsley_gen::LR_TABLE.parser(toks);
     println!("{}", parsley_gen::LR_TABLE);
-    let ast = parser.trace().parse();
-    // dbg!(&ast);
+    let _ = parser.trace().parse();
 }

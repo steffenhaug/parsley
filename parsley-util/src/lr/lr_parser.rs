@@ -1,5 +1,6 @@
 use crate::alphabet::Alphabet;
 use crate::lr::{Action::*, LrTable, Reduction, State};
+use ansi_term::Color;
 
 #[derive(Debug)]
 pub enum Tree<A: Alphabet> {
@@ -67,6 +68,9 @@ impl<A: Alphabet + 'static, const K: usize, const M: usize, const N: usize, cons
         self.states.push(self.table.start_state);
 
         // Parsing loop.
+        if self.trace {
+            println!("LR-Parser stack trace:");
+        }
         let mut lookahead = input.next();
         for i in 0.. {
             let s = self.top();
@@ -78,7 +82,12 @@ impl<A: Alphabet + 'static, const K: usize, const M: usize, const N: usize, cons
             match s.actions[a] {
                 Shift(t) => {
                     if self.trace {
-                        print_trace_step(&self, i, a, format!("S{}", t));
+                        print_trace_step(
+                            &self,
+                            i,
+                            a,
+                            format!("S{} {}", t, self.table.terminals[a]),
+                        );
                     }
                     // Push state t onto the stack.
                     self.states.push(t);
@@ -149,8 +158,12 @@ fn print_trace_step<A: Alphabet, const K: usize, const M: usize, const N: usize,
     print!("{:<5}", step);
     // Print the state stack.
     print!("States: ");
-    for state in &parser.states {
-        print!(" {:<3}", state);
+    for (i, state) in parser.states.iter().enumerate() {
+        if i != parser.states.len() - 1 {
+            print!(" {:<3}", state);
+        } else {
+            print!(" {:<3}", Color::Yellow.paint(state.to_string()));
+        }
     }
     println!();
 
@@ -164,7 +177,7 @@ fn print_trace_step<A: Alphabet, const K: usize, const M: usize, const N: usize,
     //
     println!(
         "     Look: {} => Action: {}",
-        parser.table.terminals[look],
-        act.as_ref()
+        Color::Yellow.paint(parser.table.terminals[look]),
+        Color::Green.paint(act.as_ref())
     );
 }
