@@ -102,6 +102,8 @@ pub fn alphabet_derive(input: TokenStream) -> TokenStream {
         })
         .collect();
 
+    let eof_id = symtab.len();
+
     // Now we no longer need the symtab.
     drop(symtab);
 
@@ -118,7 +120,7 @@ pub fn alphabet_derive(input: TokenStream) -> TokenStream {
         let src = std::fs::read_to_string(src_dir).expect("grammar file not found");
 
         // Compile the grammar.
-        crate::compile::compile_lr_table(src)
+        crate::compile::compile_lr_table(src, &ident)
     });
 
     let expanded = quote! {
@@ -127,7 +129,12 @@ pub fn alphabet_derive(input: TokenStream) -> TokenStream {
             fn id(&self) -> usize {
                 match self {
                     #match_arms
+                    &_ => panic!("not a terminal")
                 }
+            }
+
+            fn eof() -> usize {
+                #eof_id
             }
         }
 

@@ -59,17 +59,17 @@ Grammar rules:
 (2) T -> T - N                |β| = 3
 (3) T -> N                    |β| = 1
 (4) N -> n                    |β| = 1
-State  Action               Goto            Kernel
-       +    -    n    $     T    N    S     
-   *0  ·    ·    S4   ·     G1   G2   G3    {S' -> · S}
-    1  S5   S6   ·    R0    ·    ·    ·     {T -> T · - N, T -> T · + N, S -> T ·}
-    2  R3   R3   ·    R3    ·    ·    ·     {T -> N ·}
-    3  ·    ·    ·    ACC   ·    ·    ·     {S' -> S ·}
-    4  R4   R4   ·    R4    ·    ·    ·     {N -> n ·}
-    5  ·    ·    S4   ·     ·    G7   ·     {T -> T + · N}
-    6  ·    ·    S4   ·     ·    G8   ·     {T -> T - · N}
-    7  R1   R1   ·    R1    ·    ·    ·     {T -> T + N ·}
-    8  R2   R2   ·    R2    ·    ·    ·     {T -> T - N ·}
+State | Action              | Goto           | Kernel
+      | +    -    n    $    | T    N    S    | 
+   *0 | ·    ·    S4   ·    | G1   G2   G3   | {S' -> · S}
+    1 | S6   S5   ·    R0   | ·    ·    ·    | {S -> T ·, T -> T · + N, T -> T · - N}
+    2 | R3   R3   ·    R3   | ·    ·    ·    | {T -> N ·}
+    3 | ·    ·    ·    ACC  | ·    ·    ·    | {S' -> S ·}
+    4 | R4   R4   ·    R4   | ·    ·    ·    | {N -> n ·}
+    5 | ·    ·    S4   ·    | ·    G7   ·    | {T -> T - · N}
+    6 | ·    ·    S4   ·    | ·    G8   ·    | {T -> T + · N}
+    7 | R2   R2   ·    R2   | ·    ·    ·    | {T -> T - N ·}
+    8 | R1   R1   ·    R1   | ·    ·    ·    | {T -> T + N ·}
 ```
 Note that because of the use of un-ordered set types in the compilation, the
 table can be a bit unpredictable.

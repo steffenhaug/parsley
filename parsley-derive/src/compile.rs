@@ -7,6 +7,7 @@ use parsley_util::lr;
 use parsley_util::parser::Parser;
 use proc_macro2::TokenStream;
 use quote::quote;
+use syn::Ident;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -23,7 +24,7 @@ pub fn parse_grammar(src: String) -> Grammar {
     semantic_analysis(ast).expect("semantic error in grammar")
 }
 
-pub fn compile_lr_table(src: String) -> TokenStream {
+pub fn compile_lr_table(src: String, ty: &Ident) -> TokenStream {
     let grammar = parse_grammar(src);
 
     // This is the set the Dragon Book calls C.
@@ -161,7 +162,7 @@ pub fn compile_lr_table(src: String) -> TokenStream {
                 .position(|i_j| go == *i_j)
             {
                 // goto[i][k] := goto j
-                let conflict = goto[i][k].replace(quote!(Action::Goto(#j)));
+                let conflict = goto[i][k].replace(quote!(Some(#j)));
                 assert!(conflict.is_none());
             }
         }
@@ -177,7 +178,7 @@ pub fn compile_lr_table(src: String) -> TokenStream {
 
         for j in 0..n {
             if goto[i][j].is_none() {
-                goto[i][j].replace(quote!(Action::Error));
+                goto[i][j].replace(quote!(None));
             }
         }
     }
@@ -220,7 +221,7 @@ pub fn compile_lr_table(src: String) -> TokenStream {
     // These are used to place &'static str representations of the symbols
     // in the parsing table, so we can create nonterminals to push to the
     // stack, and print nice error messages should we encounter errors.
-    let nonterminal_names = (0..n).map(|i| nonterminals[i].to_string());
+    let nonterminal_names = (0..n).map(|i| nonterminals[i].to_string()).collect::<Vec<_>>();
     let terminal_names = (0..m + 1).map(|i| {
         let sym = symtab.iter().find(|(_, v)| **v == i).unwrap().0;
         sym.to_string()
@@ -229,6 +230,7 @@ pub fn compile_lr_table(src: String) -> TokenStream {
     let reductions = (0..p).map(|i| {
         let ord = grammar.productions[i].recipe.len();
         let sym = grammar.productions[i].symbol.to_string();
+        let sym = nonterminal_names.iter().position(|s| *s == sym);
         let descr = grammar.productions[i].to_string();
 
         quote! {
@@ -249,13 +251,15 @@ pub fn compile_lr_table(src: String) -> TokenStream {
         mod parsley_gen {
             use ::parsley::internals::lr::*;
             use ::parsley::internals::bnf::{self, Symbol::*};
+            use super::#ty;
             // Put the states into a Kx(M+1+N) LR table.
-            pub const LR_TABLE: LrTable<#k, {#m+1}, #n, #p> = LrTable {
+            pub(crate) const LR_TABLE: LrTable<#ty, #k, {#m+1}, #n, #p> = LrTable {
                 terminals: [ #(#terminal_names),* ],
                 nonterminals: [ #(#nonterminal_names),* ],
                 reductions: [ #(#reductions),* ],
                 states: [ #(#states),* ],
                 start_state: #start_state,
+                _marker: std::marker::PhantomData
             };
         }
     }

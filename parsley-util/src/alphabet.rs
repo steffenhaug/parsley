@@ -3,4 +3,5 @@
 pub trait Alphabet {
     /// Gives a number identifying the symbol uniquely.
     fn id(&self) -> usize;
+    fn eof() -> usize;
 }
