@@ -1,5 +1,5 @@
 use logos::Logos;
-use parsley::Alphabet;
+use parsley::{Parser, Alphabet};
 
 #[allow(dead_code)]
 #[derive(Alphabet, Logos, Debug)]
